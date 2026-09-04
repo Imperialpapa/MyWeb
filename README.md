@@ -27,7 +27,33 @@
    - `Project URL` → `SUPABASE_URL`
    - `anon public` 키 → `SUPABASE_ANON_KEY`
 
-### 2. 로그인 메일 설정
+### 2. 카카오 로그인 설정 (기본 로그인 방식)
+
+`config.js`의 `AUTH_PROVIDERS`에 적힌 제공자만 로그인 창에 버튼으로 나옵니다. 기본값은 `["kakao"]` 입니다.
+Supabase 쪽에서 아직 켜지 않은 상태로 버튼을 누르면 "아직 켜져 있지 않습니다" 안내가 뜹니다.
+
+**카카오 개발자 콘솔** (https://developers.kakao.com)
+
+1. **내 애플리케이션 → 애플리케이션 추가하기**. 앱 이름·회사명은 아무거나.
+2. **앱 설정 → 앱 키**에서 **REST API 키** 복사.
+3. **앱 설정 → 플랫폼 → Web** 에 사이트 주소 등록 (예: `https://my-web-imperialpapas-projects.vercel.app`).
+4. **제품 설정 → 카카오 로그인**: 활성화 **ON**. **Redirect URI** 에 아래 주소 등록 (프로젝트 주소는 본인 것으로):
+   ```
+   https://csxndscngmkciibarumi.supabase.co/auth/v1/callback
+   ```
+5. **제품 설정 → 카카오 로그인 → 보안**: **Client Secret** 코드 생성 → 복사, 활성화 상태 **사용함**.
+6. **제품 설정 → 카카오 로그인 → 동의항목**: **닉네임**과 **카카오계정(이메일)** 을 설정.
+   - 이메일을 **필수 동의**로 두려면 **비즈니스 → 비즈 앱 전환**(사업자등록번호 입력)이 필요합니다.
+   - 사업자 정보가 없으면 **선택 동의**로만 가능하며, 사용자가 이메일 제공에 체크하지 않으면 로그인이 실패합니다.
+
+**Supabase 대시보드**
+
+7. **Authentication → Providers → Kakao**: **Enabled** ON. 위에서 복사한 **REST API 키**를 `Client ID`에, **Client Secret** 을 `Client Secret`에 넣고 Save.
+8. **Authentication → URL Configuration**: `Site URL` 과 `Redirect URLs` 에 사이트 주소가 있는지 확인 (아래 3번 참고).
+
+Google 도 붙이려면 Google Cloud Console → API 및 서비스 → 사용자 인증 정보 → **OAuth 클라이언트 ID (웹)** 를 만들고, 승인된 리디렉션 URI 에 같은 콜백 주소를 넣은 뒤 Supabase **Providers → Google** 에 ID·Secret 을 넣습니다. 그리고 `config.js`의 `AUTH_PROVIDERS`를 `["kakao", "google"]` 로 바꾸면 버튼이 생깁니다.
+
+### 3. 로그인 메일 설정 (이메일 코드, 예비 방식)
 
 1. **Authentication → Providers → Email**: 켜져 있는지 확인. **Confirm email** 은 꺼도 됩니다 (링크 클릭 자체가 확인).
 2. **Authentication → URL Configuration**:
@@ -46,7 +72,7 @@
    코드 길이는 **Authentication → Providers → Email → Email OTP Length** 에서 6~10자리로 조정할 수 있습니다 (4자리는 불가).
 4. 기본 메일은 Supabase 가 시간당 몇 통만 보냅니다. 사용자가 늘면 **Authentication → SMTP Settings** 에서 Resend, Gmail 등 실제 메일 발송 서비스를 연결하세요 (무료 티어로 충분).
 
-### 3. GitHub 에 올리기
+### 4. GitHub 에 올리기
 
 ```bash
 git init
@@ -57,7 +83,7 @@ git remote add origin https://github.com/<계정>/<저장소>.git
 git push -u origin main
 ```
 
-### 4. Vercel 로 배포
+### 5. Vercel 로 배포
 
 1. https://vercel.com/new 에서 방금 올린 저장소 **Import**.
 2. Framework Preset 은 **Other**, 나머지는 기본값 그대로 **Deploy**.
@@ -65,7 +91,7 @@ git push -u origin main
 
 Netlify 도 같습니다. 저장소를 연결하고 빌드 명령 없이 배포하면 됩니다.
 
-### 5. 운영자 지정
+### 6. 운영자 지정
 
 1. 배포된 사이트에서 본인 이메일로 한 번 로그인합니다.
 2. Supabase **SQL Editor** 에서 실행 (이메일만 바꾸세요):
