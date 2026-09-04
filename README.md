@@ -44,14 +44,16 @@ Supabase 쪽에서 아직 켜지 않은 상태로 버튼을 누르면 "아직 �
    https://csxndscngmkciibarumi.supabase.co/auth/v1/callback
    ```
 5. 왼쪽 메뉴 **카카오 로그인**: 활성화 **ON**.
-6. **카카오 로그인 → 동의항목**: **닉네임**과 **프로필 사진** 을 설정 (필수 또는 선택 아무거나). 둘 중 하나라도 "미설정"이면 로그인 시 **KOE205** 오류가 납니다.
-   - **카카오계정(이메일)** 은 개인 개발자 앱에서는 비활성화되어 설정할 수 없습니다. 비즈 앱 전환(사업자 정보 심사)을 거쳐야 열립니다.
-   - 이메일 없이 쓰려면 아래 7번에서 **Allow users without an email** 을 켜면 됩니다. 사이트는 이메일 없는 계정도 정상 동작하며, 첫 로그인 때 카카오 닉네임을 이름으로 가져옵니다.
+6. **비즈 앱 전환** (필수). Supabase 는 카카오에 항상 **이메일** 동의항목을 요청하는데, 이 항목은 비즈 앱에서만 설정할 수 있습니다. 전환하지 않으면 로그인 시 **KOE205** 오류가 납니다.
+   - 먼저 **앱 → 일반** 에서 **앱 아이콘** 을 등록합니다 (전환 조건).
+   - **앱 → 일반 → 비즈니스 정보 → 사업자 정보 등록**. 사업자등록번호가 있으면 입력하고, 없으면 **개인 개발자 본인인증 + 카카오비즈니스 약관 동의** 로도 전환됩니다. 앱 소유자(Owner) 계정으로만 가능합니다.
+7. **카카오 로그인 → 동의항목**: **닉네임**, **프로필 사진**, **카카오계정(이메일)** 셋을 모두 설정합니다 (선택 동의로 충분). 하나라도 "미설정"이면 **KOE205** 가 납니다.
+   - 사용자가 동의 화면에서 이메일 체크를 빼면 계정이 만들어지지 않으니, 아래 8번의 **Allow users without an email** 을 켜 두면 그런 경우도 로그인됩니다. 사이트는 이메일 없는 계정도 정상 동작하며, 첫 로그인 때 카카오 닉네임을 이름으로 가져옵니다.
 
 **Supabase 대시보드**
 
-7. **Authentication → Providers → Kakao**: **Enabled** ON. 위에서 복사한 **REST API 키**를 `Client ID`에, **Client Secret** 을 `Client Secret`에 넣고, 이메일 동의항목을 못 켠 경우 **Allow users without an email** 도 ON 으로 한 뒤 Save.
-8. **Authentication → URL Configuration**: `Site URL` 과 `Redirect URLs` 에 사이트 주소가 있는지 확인 (아래 3번 참고).
+8. **Authentication → Providers → Kakao**: **Enabled** ON. 위에서 복사한 **REST API 키**를 `Client ID`에, **Client Secret** 을 `Client Secret`에 넣고, 이메일 동의항목을 못 켠 경우 **Allow users without an email** 도 ON 으로 한 뒤 Save.
+9. **Authentication → URL Configuration**: `Site URL` 과 `Redirect URLs` 에 사이트 주소가 있는지 확인 (아래 3번 참고).
 
 Google 도 붙이려면 Google Cloud Console → API 및 서비스 → 사용자 인증 정보 → **OAuth 클라이언트 ID (웹)** 를 만들고, 승인된 리디렉션 URI 에 같은 콜백 주소를 넣은 뒤 Supabase **Providers → Google** 에 ID·Secret 을 넣습니다. 그리고 `config.js`의 `AUTH_PROVIDERS`를 `["kakao", "google"]` 로 바꾸면 버튼이 생깁니다.
 
