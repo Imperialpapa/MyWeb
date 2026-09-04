@@ -44,13 +44,13 @@ Supabase 쪽에서 아직 켜지 않은 상태로 버튼을 누르면 "아직 �
    https://csxndscngmkciibarumi.supabase.co/auth/v1/callback
    ```
 5. 왼쪽 메뉴 **카카오 로그인**: 활성화 **ON**.
-6. **카카오 로그인 → 동의항목**: **닉네임**과 **카카오계정(이메일)** 을 설정.
-   - 이메일을 **필수 동의**로 두려면 **비즈니스 → 비즈 앱 전환**(사업자등록번호 입력)이 필요합니다.
-   - 사업자 정보가 없으면 **선택 동의**로만 가능하며, 사용자가 이메일 제공에 체크하지 않으면 로그인이 실패합니다.
+6. **카카오 로그인 → 동의항목**: **닉네임**과 **프로필 사진** 을 설정 (필수 또는 선택 아무거나). 둘 중 하나라도 "미설정"이면 로그인 시 **KOE205** 오류가 납니다.
+   - **카카오계정(이메일)** 은 개인 개발자 앱에서는 비활성화되어 설정할 수 없습니다. 비즈 앱 전환(사업자 정보 심사)을 거쳐야 열립니다.
+   - 이메일 없이 쓰려면 아래 7번에서 **Allow users without an email** 을 켜면 됩니다. 사이트는 이메일 없는 계정도 정상 동작하며, 첫 로그인 때 카카오 닉네임을 이름으로 가져옵니다.
 
 **Supabase 대시보드**
 
-7. **Authentication → Providers → Kakao**: **Enabled** ON. 위에서 복사한 **REST API 키**를 `Client ID`에, **Client Secret** 을 `Client Secret`에 넣고 Save.
+7. **Authentication → Providers → Kakao**: **Enabled** ON. 위에서 복사한 **REST API 키**를 `Client ID`에, **Client Secret** 을 `Client Secret`에 넣고, 이메일 동의항목을 못 켠 경우 **Allow users without an email** 도 ON 으로 한 뒤 Save.
 8. **Authentication → URL Configuration**: `Site URL` 과 `Redirect URLs` 에 사이트 주소가 있는지 확인 (아래 3번 참고).
 
 Google 도 붙이려면 Google Cloud Console → API 및 서비스 → 사용자 인증 정보 → **OAuth 클라이언트 ID (웹)** 를 만들고, 승인된 리디렉션 URI 에 같은 콜백 주소를 넣은 뒤 Supabase **Providers → Google** 에 ID·Secret 을 넣습니다. 그리고 `config.js`의 `AUTH_PROVIDERS`를 `["kakao", "google"]` 로 바꾸면 버튼이 생깁니다.
@@ -95,12 +95,19 @@ Netlify 도 같습니다. 저장소를 연결하고 빌드 명령 없이 배포�
 
 ### 6. 운영자 지정
 
-1. 배포된 사이트에서 본인 이메일로 한 번 로그인합니다.
+1. 배포된 사이트에서 본인 계정(카카오 또는 이메일)으로 한 번 로그인합니다.
 2. Supabase **SQL Editor** 에서 실행 (이메일만 바꾸세요):
 
 ```sql
 update public.profiles set is_admin = true
   where id = (select id from auth.users where email = 'mail@wkac.co.kr');
+```
+
+카카오처럼 이메일이 없는 계정이면 사이트에서 정한 **이름**으로 지정합니다 (같은 이름이 여럿이면 가장 먼저 가입한 사람):
+
+```sql
+update public.profiles set is_admin = true
+  where id = (select id from public.profiles where name = '내 이름' order by created_at limit 1);
 ```
 
 3. 사이트를 새로고침하면 이름 옆에 **운영자** 표시와 상단에 **검토함** 버튼이 생깁니다.

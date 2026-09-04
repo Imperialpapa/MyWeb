@@ -377,9 +377,12 @@ function SupabaseStore(){
     const u=session&&session.user;
     if(!u){ Object.assign(me,{id:null,name:'',email:'',admin:false}); }
     else{
-      me.id=u.id; me.email=u.email||'';
+      me.id=u.id; me.email=u.email||''; me.provider=(u.app_metadata&&u.app_metadata.provider)||'email';
       const {data}=await sb.from('profiles').select('name,is_admin').eq('id',u.id).maybeSingle();
       me.name=(data&&data.name)||''; me.admin=!!(data&&data.is_admin);
+      // 소셜 로그인 첫 진입: 프로필 이름이 비어 있으면 카카오·구글 닉네임을 그대로 사용
+      if(!me.name){ const md=u.user_metadata||{}; const nick=(md.name||md.full_name||md.preferred_username||md.user_name||'').trim().slice(0,30);
+        if(nick){ const {error}=await sb.from('profiles').update({name:nick}).eq('id',u.id); if(!error) me.name=nick; } }
     }
     authCb&&authCb(me);
     await Promise.all([load('reports'),load('votes')]);
@@ -888,7 +891,7 @@ function openCatEditor(){
 function openMore(){
   modal(`${mh('더 보기')}<div class="modal-b"><div class="menu">
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
-    ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email)}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
+    ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
     <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개</div>
   </div>`,'narrow');
@@ -947,7 +950,7 @@ render();
   const ready=CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase;
   store=ready?SupabaseStore():LocalStore();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
-  store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email}); S.admin=!!me.admin; render(); });
+  store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||''}); S.admin=!!me.admin; render(); });
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));
