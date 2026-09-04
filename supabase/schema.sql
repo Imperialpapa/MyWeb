@@ -30,10 +30,13 @@ returns boolean language sql stable security definer set search_path = public as
 $$;
 
 -- 일반 사용자가 자기 is_admin 을 바꾸지 못하게
+-- (SQL Editor 처럼 로그인 컨텍스트가 없는 직접 실행은 허용 → 첫 운영자 지정용)
 create or replace function public.protect_admin_flag()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  if new.is_admin is distinct from old.is_admin and not public.is_admin() then
+  if new.is_admin is distinct from old.is_admin
+     and auth.uid() is not null
+     and not public.is_admin() then
     raise exception '운영자 권한은 직접 바꿀 수 없습니다';
   end if;
   return new;

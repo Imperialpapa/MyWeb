@@ -675,7 +675,14 @@ function openLogin(reason){
   f.addEventListener('submit',async e=>{
     e.preventDefault(); const email=f.e.value.trim(); $('#err').textContent=''; $('#lfBtn').disabled=true;
     try{ await store.login(email); $('#lfMsg').innerHTML=`<div class="ok">✓ <b>${esc(email)}</b> 로 링크를 보냈습니다. 메일함(스팸함 포함)에서 링크를 눌러 주세요. 이 창은 닫아도 됩니다.</div>`; $('#lfBtn').hidden=true; }
-    catch(x){ $('#err').textContent='메일을 보내지 못했습니다: '+(x.message||x.code||'오류'); $('#lfBtn').disabled=false; }
+    catch(x){
+      const msg=x.message||'', m=msg.match(/after (\d+) seconds?/i), rate=m||x.code==='over_email_send_rate_limit'||/rate limit/i.test(msg);
+      if(!rate){ $('#err').textContent='메일을 보내지 못했습니다: '+(msg||x.code||'오류'); $('#lfBtn').disabled=false; return; }
+      let left=m?+m[1]:60;
+      $('#lfMsg').innerHTML=`<div class="hint" style="font-size:13px">방금 보낸 로그인 링크가 있습니다. 먼저 메일함(스팸함 포함)을 확인해 주세요. 링크가 안 왔다면 잠시 후 다시 보낼 수 있습니다.</div>`;
+      const btn=$('#lfBtn'), tick=()=>{ if(!document.body.contains(btn)) return; if(left<=0){ btn.disabled=false; btn.textContent='다시 보내기'; return; } btn.textContent=`${left}초 후 다시 보내기`; left--; setTimeout(tick,1000); };
+      tick();
+    }
   });
 }
 
