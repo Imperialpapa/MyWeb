@@ -33,7 +33,18 @@
 2. **Authentication → URL Configuration**:
    - `Site URL`: 배포 주소 (예: `https://빠른연결.vercel.app`). 아직 없으면 배포 후에 채우세요.
    - `Redirect URLs`: 같은 주소와 `http://localhost:*` 추가.
-3. 기본 메일은 Supabase 가 시간당 몇 통만 보냅니다. 사용자가 늘면 **Authentication → SMTP Settings** 에서 Resend, Gmail 등 실제 메일 발송 서비스를 연결하세요 (무료 티어로 충분).
+3. **Authentication → Email Templates → Magic Link**: 본문에 6자리 코드가 함께 나가도록 아래처럼 바꿉니다. (회사 메일 보안 프로그램이 링크를 미리 열어 버려 "만료" 가 뜨는 경우, 코드로 로그인할 수 있습니다.)
+
+   ```html
+   <h2>빠른 연결 로그인</h2>
+   <p>아래 6자리 코드를 사이트 로그인 창에 입력하세요.</p>
+   <p style="font-size:28px;letter-spacing:6px"><b>{{ .Token }}</b></p>
+   <p>또는 이 링크를 눌러도 로그인됩니다: <a href="{{ .ConfirmationURL }}">로그인</a></p>
+   <p style="color:#888">본인이 요청하지 않았다면 이 메일은 무시하세요. 코드는 1시간 동안 유효합니다.</p>
+   ```
+
+   코드 길이는 **Authentication → Providers → Email → Email OTP Length** 에서 6~10자리로 조정할 수 있습니다 (4자리는 불가).
+4. 기본 메일은 Supabase 가 시간당 몇 통만 보냅니다. 사용자가 늘면 **Authentication → SMTP Settings** 에서 Resend, Gmail 등 실제 메일 발송 서비스를 연결하세요 (무료 티어로 충분).
 
 ### 3. GitHub 에 올리기
 

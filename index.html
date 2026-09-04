@@ -305,7 +305,7 @@ function LocalStore(){
     kind:'local',
     subscribe(cb){ subs.push(cb); emit(); },
     onAuth(cb){ authCb=cb; cb(me); },
-    async login(){ return {ok:true} }, async logout(){},
+    async login(){ return {ok:true} }, async verifyCode(){ return {ok:true} }, async logout(){},
     async setName(n){ me.name=n; LS.set('toolbox.name',n); authCb&&authCb(me); },
     async put(it){ up(D.items,it); LS.set(K.items,D.items); emit() },
     async patch(id,p){ const i=D.items.findIndex(x=>x.id===id); if(i>=0){ D.items[i]={...D.items[i],...p}; LS.set(K.items,D.items); emit() } },
@@ -371,6 +371,10 @@ function SupabaseStore(){
     async login(email){
       const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname}});
       if(error) fail(error,'로그인 메일을 보내지 못했습니다'); return {ok:true};
+    },
+    async verifyCode(email,code){
+      const {error}=await sb.auth.verifyOtp({email,token:code,type:'email'});
+      if(error) fail(error,'코드가 맞지 않습니다'); return {ok:true};
     },
     async logout(){ await sb.auth.signOut(); },
     async setName(n){ const {error}=await sb.from('profiles').update({name:n}).eq('id',me.id); if(error) fail(error); me.name=n; authCb&&authCb(me); },
@@ -668,18 +672,37 @@ function openLogin(reason){
   modal(`${mh('로그인')}<form id="lf"><div class="modal-b">
     ${reason?`<div class="hint" style="font-size:13px;color:var(--muted)">${esc(reason)}</div>`:''}
     <label class="fld">이메일<input name="e" type="email" required placeholder="you@example.com" autocomplete="email"></label>
-    <div class="hint">비밀번호는 없습니다. 입력한 주소로 로그인 링크를 보내 드리며, 링크를 누르면 바로 로그인됩니다. 처음이면 자동으로 가입됩니다.</div>
+    <div class="hint">비밀번호는 없습니다. 입력한 주소로 <b>6자리 코드</b>와 로그인 링크를 보내 드립니다. 코드를 입력하거나 링크를 누르면 로그인됩니다. 처음이면 자동으로 가입됩니다.</div>
     <div id="lfMsg"></div>
-  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" id="lfBtn">로그인 링크 보내기</button></div></form>`,'narrow');
+    <div id="lfCode" hidden>
+      <label class="fld">메일로 받은 6자리 코드<input name="c" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" autocomplete="one-time-code"></label>
+      <div class="hint">코드는 메일 본문에 있습니다. 링크가 안 열리거나 만료됐다고 나와도 코드는 그대로 쓸 수 있습니다.</div>
+    </div>
+    <div class="hint"><a href="#" id="lfHave" style="color:var(--muted)">이미 받은 코드가 있어요</a></div>
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" id="lfBtn">코드·링크 보내기</button><button class="btn primary" id="lfVerify" hidden>코드로 로그인</button></div></form>`,'narrow');
   const f=$('#lf'); f.e.focus();
+  const showCode=()=>{ $('#lfCode').hidden=false; $('#lfVerify').hidden=false; $('#lfHave').parentElement.hidden=true; (f.e.value.trim()?f.c:f.e).focus(); };
+  $('#lfHave').addEventListener('click',e=>{ e.preventDefault(); showCode(); });
+  f.c.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); f.requestSubmit($('#lfVerify')); } });
   f.addEventListener('submit',async e=>{
-    e.preventDefault(); const email=f.e.value.trim(); $('#err').textContent=''; $('#lfBtn').disabled=true;
-    try{ await store.login(email); $('#lfMsg').innerHTML=`<div class="ok">✓ <b>${esc(email)}</b> 로 링크를 보냈습니다. 메일함(스팸함 포함)에서 링크를 눌러 주세요. 이 창은 닫아도 됩니다.</div>`; $('#lfBtn').hidden=true; }
+    e.preventDefault(); const email=f.e.value.trim(); $('#err').textContent='';
+    const verifying=e.submitter&&e.submitter.id==='lfVerify';
+    if(verifying){
+      if(!email){ $('#err').textContent='이메일을 입력해 주세요.'; f.e.focus(); return; }
+      const code=f.c.value.trim(); if(!/^\d{6}$/.test(code)){ $('#err').textContent='숫자 6자리를 입력해 주세요.'; f.c.focus(); return; }
+      $('#lfVerify').disabled=true;
+      try{ await store.verifyCode(email,code); closeModal(); toast('로그인했습니다'); }
+      catch(x){ const m=x.message||''; $('#err').textContent=/expired|invalid/i.test(m)?'코드가 틀리거나 만료되었습니다. 메일의 최신 코드를 확인해 주세요.':'로그인하지 못했습니다: '+(m||x.code||'오류'); $('#lfVerify').disabled=false; }
+      return;
+    }
+    $('#lfBtn').disabled=true;
+    try{ await store.login(email); $('#lfMsg').innerHTML=`<div class="ok">✓ <b>${esc(email)}</b> 로 보냈습니다. 메일함(스팸함 포함)에서 6자리 코드를 아래에 입력하거나 링크를 눌러 주세요.</div>`; $('#lfBtn').hidden=true; showCode(); }
     catch(x){
       const msg=x.message||'', m=msg.match(/after (\d+) seconds?/i), rate=m||x.code==='over_email_send_rate_limit'||/rate limit/i.test(msg);
       if(!rate){ $('#err').textContent='메일을 보내지 못했습니다: '+(msg||x.code||'오류'); $('#lfBtn').disabled=false; return; }
       let left=m?+m[1]:60;
-      $('#lfMsg').innerHTML=`<div class="hint" style="font-size:13px">방금 보낸 로그인 링크가 있습니다. 먼저 메일함(스팸함 포함)을 확인해 주세요. 링크가 안 왔다면 잠시 후 다시 보낼 수 있습니다.</div>`;
+      $('#lfMsg').innerHTML=`<div class="hint" style="font-size:13px">방금 보낸 메일이 있습니다. 메일함(스팸함 포함)에서 6자리 코드를 찾아 아래에 입력해 주세요. 안 왔다면 잠시 후 다시 보낼 수 있습니다.</div>`;
+      showCode();
       const btn=$('#lfBtn'), tick=()=>{ if(!document.body.contains(btn)) return; if(left<=0){ btn.disabled=false; btn.textContent='다시 보내기'; return; } btn.textContent=`${left}초 후 다시 보내기`; left--; setTimeout(tick,1000); };
       tick();
     }
@@ -889,6 +912,15 @@ render();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
   store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email}); S.admin=!!me.admin; render(); });
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
+  // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
+  const h=new URLSearchParams(location.hash.replace(/^#/,''));
+  if(ready&&h.get('error')){
+    const code=h.get('error_code')||'', desc=h.get('error_description')||'';
+    history.replaceState(null,'',location.pathname+location.search);
+    const why=code==='otp_expired'?'로그인 링크가 만료되었거나 이미 사용되었습니다. 메일 보안 프로그램이 링크를 먼저 열어 보는 경우 이렇게 됩니다. 링크 대신 메일 속 6자리 코드를 입력해 주세요.':'로그인 링크를 처리하지 못했습니다: '+desc;
+    openLogin(why);
+    $('#lfHave').click();
+  }
 })();
 </script>
 </body>
