@@ -21,7 +21,10 @@
 - `index.html`: 새 항목 창에 **✦ AI 분류 제안** 버튼, 분야 옆·더 보기에 운영자용 **✦ AI 정리** 창(재분류 표 → 체크 적용, 구조 개편안 → 고쳐서 저장). `patch` 가 분야·태그도 고치도록 확장. 분야 텍스트 파싱을 `catsToText`/`parseCatText` 로 분리
 - `config.js` `AI: true` 스위치. `supabase/config.toml`(함수 JWT 게이트웨이 검사 끔), `.gitignore` 에 CLI 작업 폴더
 - README 7단계 "AI 기능 켜기" (Anthropic 키 발급 → `npx supabase` 로 secret 등록·배포)
-- **아직 배포 전**: `npx supabase login` 은 브라우저 로그인이 필요해 사용자가 직접 실행해야 함 (todo 참고)
+- **배포 완료** (2026-09-07): Edge Function `ai` 배포, `ANTHROPIC_API_KEY` secret 등록, `schema.sql` 재실행, Vercel 배포 확인
+  - 확인한 것: 인증 없이 호출 → 401, CORS preflight → 200, 배포된 index.html 에 감사 수정 반영됨
+  - `supabase login` 은 브라우저(TTY)가 필요해 Claude Code 안에서는 안 되고 별도 PowerShell 창에서 해야 한다
+  - `secrets list` 는 키를 해시로만 보여 준다 (실제 값 노출 없음)
 
 ### 코드 감사 (다중 에이전트, 발견 83건)
 6개 관점(로직·보안·Edge Function·성능·데이터·UX)으로 탐색한 뒤 발견마다 3명이 반박을 시도하는 방식으로 검증. **고친 것:**

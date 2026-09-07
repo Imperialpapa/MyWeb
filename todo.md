@@ -1,17 +1,9 @@
 # 할 일
 
 ## 바로 할 것
-- [ ] **AI 기능 배포** (README 7단계). 터미널에서 순서대로:
-  ```bash
-  npx supabase login                                    # 브라우저가 열림
-  npx supabase link --project-ref csxndscngmkciibarumi  # DB 비밀번호는 Enter 로 건너뛰어도 됨
-  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...  # console.anthropic.com 에서 발급
-  npx supabase functions deploy ai
-  ```
-  배포 후 사이트에서 새 항목 창의 **✦ AI 분류 제안**, 운영자로 **✦ AI 정리** 동작 확인
-- [ ] **`schema.sql` 다시 실행** (감사 후 추가된 부분: AI 사용량 한도 `ai_take_quota`, id 형식·길이 제약, `votes` 컬럼 권한, 인덱스 2개).
-  실행 전 어긋나는 id 가 없는지 확인: `select id from public.items where id !~ '^[A-Za-z0-9_-]{1,64}$';`
-  이걸 안 하면 AI 함수가 "사용량을 확인하지 못했습니다" 로 실패합니다
+- [x] **AI 기능 배포 완료** (2026-09-07). Edge Function `ai` 배포, `ANTHROPIC_API_KEY` 등록, `schema.sql` 재실행 완료
+- [ ] **사이트에서 AI 동작 확인**: 로그인 → ＋추가 → 제목·주소 넣고 **✦ AI 분류 제안**. 운영자로 분야 옆 **✦ AI 정리** 도 한 번
+  (함수 코드를 고치면 `npx supabase functions deploy ai` 만 다시 실행. 로그는 대시보드 Edge Functions → ai → Logs)
 - [ ] **운영자 지정**: Supabase SQL Editor 에서 실행 (README 6단계). 실행 후 사이트에 "운영자" 표시·"검토함" 버튼 확인
   ```sql
   update public.profiles set is_admin = true
