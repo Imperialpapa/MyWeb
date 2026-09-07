@@ -29,6 +29,38 @@ returns boolean language sql stable security definer set search_path = public as
   select coalesce((select is_admin from public.profiles where id = auth.uid()), false)
 $$;
 
+-- ---------- 분야 주 관리자 ----------
+-- settings.categories 의 각 분야에 owner(사용자 uuid)를 넣어 지정한다.
+-- 지정하지 않은 분야는 owner 가 없고, 운영자가 그대로 담당한다.
+
+-- 내가 이 분야의 주 관리자인가
+create or replace function public.manages_category(cat text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((
+    select true
+      from public.settings s, lateral jsonb_array_elements(s.value->'list') c
+     where s.key = 'categories'
+       and c->>'name' = cat
+       and c->>'owner' = auth.uid()::text
+     limit 1), false)
+$$;
+
+-- 내가 아무 분야라도 맡고 있는가 (자료를 다른 분야로 옮길 때 쓴다)
+create or replace function public.manages_any()
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((
+    select true
+      from public.settings s, lateral jsonb_array_elements(s.value->'list') c
+     where s.key = 'categories' and c->>'owner' = auth.uid()::text
+     limit 1), false)
+$$;
+
+-- 이 자료가 속한 분야를 내가 맡고 있는가 (신고 검토용)
+create or replace function public.manages_item(iid text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.manages_category((select category from public.items where id = iid))
+$$;
+
 -- 일반 사용자가 자기 is_admin 을 바꾸지 못하게
 -- (SQL Editor 처럼 로그인 컨텍스트가 없는 직접 실행은 허용 → 첫 운영자 지정용)
 create or replace function public.protect_admin_flag()
@@ -121,7 +153,7 @@ create table if not exists public.settings (
 );
 insert into public.settings (key, value) values (
   'categories',
-  '{"list":[{"name":"개발·도구","subs":["웹","CLI·스크립트","디자인·문서","학습자료","프로젝트 운영"]},{"name":"생활·건강·취미","subs":["운동","식단","정보·공공","책·문화"]},{"name":"AI 에이전트","subs":["에이전트 도구","프레임워크·SDK","MCP·연동","프롬프트·스킬","학습자료"]}]}'::jsonb
+  '{"list":[{"name":"개발·도구","subs":["웹","CLI·스크립트","디자인·문서","학습자료","프로젝트 운영"]},{"name":"생활·건강·취미","subs":["운동","식단","정보·공공","책·문화"]},{"name":"AI 에이전트","subs":["에이전트 도구","프레임워크·SDK","MCP·연동","프롬프트·스킬","학습자료"]},{"name":"유머","subs":["만화·웹툰","개발자 유머","밈·인터넷 문화","이스터에그·장난"]}]}'::jsonb
 ) on conflict (key) do nothing;
 
 -- ============================================================
@@ -149,10 +181,14 @@ drop policy if exists items_insert on public.items;
 create policy items_insert on public.items for insert to authenticated with check (owner_id = auth.uid());
 drop policy if exists items_update on public.items;
 create policy items_update on public.items for update to authenticated
-  using (owner_id = auth.uid() or public.is_admin())
-  with check (owner_id = auth.uid() or public.is_admin());
+  -- using 은 고치기 전 행을 본다: 내 글이거나, 운영자이거나, 그 분야의 주 관리자
+  using (owner_id = auth.uid() or public.is_admin() or public.manages_category(category))
+  -- with check 는 고친 뒤 행을 본다. 주 관리자가 잘못 분류된 자료를 맞는 분야로 옮길 수 있어야 하므로
+  -- 여기서는 분야를 따지지 않고 "분야를 하나라도 맡은 사람"인지만 본다.
+  with check (owner_id = auth.uid() or public.is_admin() or public.manages_any());
 drop policy if exists items_delete on public.items;
-create policy items_delete on public.items for delete to authenticated using (owner_id = auth.uid() or public.is_admin());
+create policy items_delete on public.items for delete to authenticated
+  using (owner_id = auth.uid() or public.is_admin() or public.manages_category(category));
 
 -- collections
 drop policy if exists collections_select on public.collections;
@@ -168,11 +204,13 @@ create policy collections_delete on public.collections for delete to authenticat
 
 -- reports: 신고자는 자기 신고만 보고, 운영자는 전체를 보고 닫음
 drop policy if exists reports_select on public.reports;
-create policy reports_select on public.reports for select to authenticated using (reporter_id = auth.uid() or public.is_admin());
+create policy reports_select on public.reports for select to authenticated
+  using (reporter_id = auth.uid() or public.is_admin() or public.manages_item(item_id));
 drop policy if exists reports_insert on public.reports;
 create policy reports_insert on public.reports for insert to authenticated with check (reporter_id = auth.uid());
 drop policy if exists reports_delete on public.reports;
-create policy reports_delete on public.reports for delete to authenticated using (public.is_admin());
+create policy reports_delete on public.reports for delete to authenticated
+  using (public.is_admin() or public.manages_item(item_id));
 
 -- votes: 자기 추천만
 drop policy if exists votes_select on public.votes;
@@ -210,6 +248,18 @@ begin
 end $$;
 revoke all on function public.ai_take_quota(integer) from public;
 grant execute on function public.ai_take_quota(integer) to authenticated;
+
+-- 호출이 우리 쪽(키 만료·네트워크·서버) 이유로 실패하면 차감한 횟수를 돌려준다.
+-- 이게 없으면 키가 죽어 있는 동안 실패한 호출까지 사용자의 하루 한도를 깎는다.
+create or replace function public.ai_refund_quota()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return; end if;
+  update public.ai_usage set n = greatest(n - 1, 0)
+   where user_id = auth.uid() and day = current_date;
+end $$;
+revoke all on function public.ai_refund_quota() from public;
+grant execute on function public.ai_refund_quota() to authenticated;
 
 -- ---------- id 형식 제약 (id 가 화면 HTML 속성에 들어가므로 서버에서 막는다) ----------
 -- 이미 운영 중인 DB 라면 먼저 아래로 어긋나는 행이 없는지 확인하세요. 있으면 그 행을 고친 뒤 실행합니다.

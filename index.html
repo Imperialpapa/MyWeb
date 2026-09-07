@@ -104,10 +104,19 @@ a{color:var(--link)}
 @media(max-width:820px){.f{width:auto;padding:5px 10px;border:1px solid var(--line)}.f .cnt{display:none}.f.sub{padding-left:10px}}
 .dot{width:8px;height:8px;border-radius:2px;flex:none;margin-right:8px}
 .tags-cloud{display:flex;flex-wrap:wrap;gap:6px}
-.tagbox summary{list-style:none;cursor:pointer;margin:0 0 6px;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;user-select:none}
-.tagbox summary::-webkit-details-marker{display:none}
-.tagbox summary::before{content:"▸";font-size:10px}
-.tagbox[open] summary::before{content:"▾"}
+.tagbox summary,.sec summary{list-style:none;cursor:pointer;margin:0 0 6px;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;user-select:none}
+.tagbox summary::-webkit-details-marker,.sec summary::-webkit-details-marker{display:none}
+.tagbox summary::before,.sec summary::before{content:"▸";font-size:10px;flex:none}
+.tagbox[open] summary::before,.sec[open] summary::before{content:"▾"}
+.sec summary:hover{color:var(--text)}
+.sec summary .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec summary .num{font-family:var(--mono);color:var(--faint);letter-spacing:0;text-transform:none}
+.sec summary .cur{color:var(--accent);letter-spacing:0;text-transform:none;font-weight:400}
+.sec summary .acts{display:flex;gap:2px}
+.sec summary .acts button{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 5px;letter-spacing:0;text-transform:none;border-radius:5px;min-height:24px}
+.sec summary .acts button:hover{color:var(--text);background:var(--surface)}
+.owner{font-size:10.5px;color:var(--faint);letter-spacing:0;text-transform:none;padding:0 8px 4px 24px}
+.owner b{color:var(--muted);font-weight:500}
 .tagbox summary .num{font-family:var(--mono);color:var(--faint);letter-spacing:0}
 .tagbox summary .cur{color:var(--accent);letter-spacing:0;text-transform:none;font-family:var(--mono)}
 /* 모바일: 사이드바 항목을 본문과 같은 열에 펼치고, 태그만 본문 아래로 */
@@ -270,18 +279,19 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
 <div class="wrap">
   <aside class="rail">
     <div class="me" id="me"></div>
-    <section>
-      <h4>종류</h4>
+    <details class="sec" id="typeBox">
+      <summary><span class="ttl">종류</span><span class="cur" id="typeCur"></span></summary>
       <div class="rail-list" id="typeList"></div>
-    </section>
-    <section>
-      <h4>분야 <span><button id="catEdit" hidden title="분야·하위분야 편집">편집</button><button id="catAi" hidden title="AI 로 항목 재분류·분야 구조 제안">✦ AI 정리</button></span></h4>
+    </details>
+    <details class="sec" id="catBox">
+      <summary><span class="ttl">분야</span><span class="cur" id="catCur"></span><span class="acts"><button type="button" id="catEdit" hidden title="분야·하위분야 편집">편집</button><button type="button" id="catAi" hidden title="AI 로 항목 재분류·분야 구조 제안">✦ AI</button></span></summary>
       <div class="rail-list" id="catList"></div>
-    </section>
-    <section>
-      <h4>모음 <button id="colNew" title="새 모음 만들기">＋ 새 모음</button></h4>
+      <div class="owner" id="catOwnerLine" hidden></div>
+    </details>
+    <details class="sec" id="colBox">
+      <summary><span class="ttl">모음</span><span class="num" id="colNum"></span><span class="acts"><button type="button" id="colNew" title="새 모음 만들기">＋ 새 모음</button></span></summary>
       <div class="rail-list" id="colList"></div>
-    </section>
+    </details>
     <details class="tagbox" id="tagBox">
       <summary><span id="tagSum">태그</span></summary>
       <div class="tags-cloud" id="tagList"></div>
@@ -332,8 +342,17 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
 const CFG=window.TOOLBOX_CONFIG||{};
 let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
 const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
-const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]},{name:'AI 에이전트',subs:[]}];
-const normCats=list=>(Array.isArray(list)?list:[]).map(c=>typeof c==='string'?{name:c,subs:[]}:{name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]}).filter(c=>c.name);
+const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]},{name:'AI 에이전트',subs:[]},{name:'유머',subs:[]}];
+// 분야 하나: {name, subs, owner?, ownerName?}
+//   owner     주 관리자의 사용자 id. 없으면 운영자가 담당
+//   ownerName 그때의 닉네임 스냅샷. 로그인 안 한 사람도 담당자를 볼 수 있게 함께 저장한다
+const normCats=list=>(Array.isArray(list)?list:[]).map(c=>{
+  if(typeof c==='string') return {name:c,subs:[]};
+  const o={name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]};
+  if(c.owner) o.owner=String(c.owner);
+  if(c.ownerName) o.ownerName=String(c.ownerName).slice(0,24);
+  return o;
+}).filter(c=>c.name);
 const LS={get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v) }catch(e){ return d } },set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} }};
 
 function LocalStore(){
@@ -351,6 +370,7 @@ function LocalStore(){
     onAuth(cb){ authCb=cb; cb(me); },
     async login(){ return {ok:true} }, async verifyCode(){ return {ok:true} }, async loginWith(){ return {ok:true} }, async logout(){},
     async setName(n){ me.name=n; LS.set('toolbox.name',n); authCb&&authCb(me); },
+    async renamePast(n){ let c=0; D.items.forEach(i=>{ if(i.ownerId===me.id&&i.by!==n){ i.by=n; c++ } }); D.cols.forEach(x=>{ if(x.ownerId===me.id) x.by=n }); LS.set(K.items,D.items); LS.set(K.cols,D.cols); emit(); return c },
     async put(it){ up(D.items,it); LS.set(K.items,D.items); emit() },
     async patch(id,p){ const i=D.items.findIndex(x=>x.id===id); if(i>=0){ D.items[i]={...D.items[i],...p}; LS.set(K.items,D.items); emit() } },
     async remove(id){ D.items=D.items.filter(x=>x.id!==id); LS.set(K.items,D.items); emit() },
@@ -360,6 +380,7 @@ function LocalStore(){
     async removeReports(ids){ D.reports=D.reports.filter(x=>!ids.includes(x.id)); LS.set(K.reports,D.reports); emit() },
     async vote(id){ if(D.votes.includes(id)) return 'dup'; D.votes.push(id); LS.set(K.votes,D.votes); const i=D.items.findIndex(x=>x.id===id); if(i>=0) D.items[i].votes=(D.items[i].votes||0)+1; LS.set(K.items,D.items); emit(); return 'added' },
     async saveCategories(list){ D.cats=normCats(list); LS.set(K.cats,D.cats); emit() },
+    async people(){ return me.name?[{id:me.id,name:me.name}]:[] },
     async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
   };
 }
@@ -401,14 +422,16 @@ function SupabaseStore(){
   // 인증
   async function applySession(session){
     const u=session&&session.user;
-    if(!u){ Object.assign(me,{id:null,name:'',email:'',admin:false}); }
+    if(!u){ Object.assign(me,{id:null,name:'',email:'',admin:false,suggestedName:''}); }
     else{
       me.id=u.id; me.email=u.email||''; me.provider=(u.app_metadata&&u.app_metadata.provider)||'email';
       const {data}=await sb.from('profiles').select('name,is_admin').eq('id',u.id).maybeSingle();
       me.name=(data&&data.name)||''; me.admin=!!(data&&data.is_admin);
-      // 소셜 로그인 첫 진입: 프로필 이름이 비어 있으면 카카오·구글 닉네임을 그대로 사용
-      if(!me.name){ const md=u.user_metadata||{}; const nick=(md.name||md.full_name||md.preferred_username||md.user_name||'').trim().slice(0,30);
-        if(nick){ const {error}=await sb.from('profiles').update({name:nick}).eq('id',u.id); if(!error) me.name=nick; } }
+      // 소셜 로그인 첫 진입: 카카오·구글 닉네임은 "제안"만 한다. 저장하지 않는다.
+      // 카카오 프로필 이름은 본명인 경우가 많고, 자료를 올리면 누구에게나 공개되기 때문이다.
+      // 이름 창(openNameForm)이 이 값을 미리 채워 보여 주고, 사용자가 확인·수정한 뒤에 저장된다.
+      if(!me.name){ const md=u.user_metadata||{};
+        me.suggestedName=(md.name||md.full_name||md.preferred_username||md.user_name||'').trim().slice(0,24); }
     }
     authCb&&authCb(me);
     await Promise.all([load('reports'),load('votes')]);
@@ -432,6 +455,16 @@ function SupabaseStore(){
     },
     async logout(){ await sb.auth.signOut(); },
     async setName(n){ const {error}=await sb.from('profiles').update({name:n}).eq('id',me.id); if(error) fail(error); me.name=n; authCb&&authCb(me); },
+    // 예전에 올린 자료·모음의 표시 이름도 함께 바꾼다.
+    // by 는 항목마다 복사되어 저장되므로, 이걸 하지 않으면 이름을 바꿔도 예전 글에는 옛 이름이 남는다.
+    async renamePast(n){
+      if(!me.id) return 0;
+      const {data,error}=await sb.from('items').update({by:n}).eq('owner_id',me.id).neq('by',n).select('id');
+      if(error) fail(error);
+      await sb.from('collections').update({by:n}).eq('owner_id',me.id).neq('by',n);
+      bump('items'); bump('collections');
+      return (data||[]).length;
+    },
     // 신규는 insert, 수정은 update. upsert 를 쓰면 Postgres 가 INSERT 정책(owner_id=auth.uid())까지 새 행에 적용해
     // 운영자가 남의 항목을 고칠 때 항상 42501 이 난다. 수정 시 owner_id·created_at 은 보내지 않아 소유권도 지킨다.
     async put(it){
@@ -461,6 +494,13 @@ function SupabaseStore(){
     async removeReports(ids){ if(!ids.length) return; const {error}=await sb.from('reports').delete().in('id',ids); if(error) fail(error); bump('reports'); },
     async vote(id){ const {error}=await sb.from('votes').insert({item_id:id,user_id:me.id}); if(error){ if(error.code==='23505') return 'dup'; fail(error); } D.myVotes.push(id); bump('items'); return 'added'; },
     async saveCategories(list){ const {error}=await sb.from('settings').upsert({key:'categories',value:{list:normCats(list)},updated_at:new Date().toISOString()}); if(error) fail(error); bump('settings'); },
+    // 주 관리자로 지정할 사람 목록. 운영자만 부를 수 있다 (profiles 정책이 운영자에게만 전체 조회를 허용).
+    // 닉네임만 돌려준다. 이메일 등 계정 정보는 화면에 올리지 않는다.
+    async people(){
+      const {data,error}=await sb.from('profiles').select('id,name').order('created_at');
+      if(error) fail(error);
+      return (data||[]).map(r=>({id:r.id,name:(r.name||'').trim()})).filter(p=>p.name);
+    },
     // AI: Edge Function 'ai' 에 요청. 로그인 토큰은 supabase-js 가 자동으로 붙인다
     async ai(action,payload){
       const {data,error}=await sb.functions.invoke('ai',{body:{action,...(payload||{})}});
@@ -503,14 +543,28 @@ const host=u=>{ try{ return new URL(u).hostname.replace(/^www\./,'') }catch(e){ 
 const rel=iso=>{ const d=(Date.now()-new Date(iso).getTime())/1000; if(isNaN(d))return ''; if(d<3600)return Math.max(1,Math.round(d/60))+'분 전'; if(d<86400)return Math.round(d/3600)+'시간 전'; if(d<86400*30)return Math.round(d/86400)+'일 전'; return new Date(iso).toLocaleDateString('ko-KR',{year:'2-digit',month:'numeric',day:'numeric'}) };
 let toastT; function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2800); }
 const loggedIn=()=>!!ME.id;
-const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id);
+/* 분야 주 관리자: settings 의 owner 가 나인 분야들 */
+const myCats=()=>ME.id?S.cats.filter(c=>c.owner===ME.id).map(c=>c.name):[];
+const managesCat=n=>!!n&&myCats().includes(n);
+const isMod=()=>S.admin||myCats().length>0;                 // 검토함을 볼 수 있는 사람
+const catOwner=n=>S.cats.find(c=>c.name===n);
+/* 수정·삭제 가능? 내 것이거나, 운영자이거나, 그 자료가 속한 분야의 주 관리자 */
+const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id)||managesCat(o.category);
 const myReported=()=>new Set(S.reports.filter(r=>r.reporterId===ME.id).map(r=>r.itemId));
 /* AI: 운영자용 정리 도구는 공유 저장소 + 운영자일 때만, 분류 제안 버튼은 공유 저장소 + 로그인일 때 */
 const aiOn=()=>AI_ON&&!!store&&store.kind==='db';
 const aiReady=()=>aiOn()&&S.admin;
 const topTagsLocal=(n=40)=>{ const c={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>c[t]=(c[t]||0)+1)); return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n).map(([t])=>t); };
 const catsToText=list=>list.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
-const parseCatText=text=>text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{ const [n,s]=l.split(/[:：]/); return {name:n.trim(),subs:(s||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean)} }).filter(c=>c.name);
+// 분야 편집 텍스트 → 목록. 화면에 없는 정보(주 관리자)는 기존 값에서 이름으로 찾아 이어 붙인다.
+// 이걸 안 하면 분야 편집이나 AI 구조 저장 한 번에 담당자 지정이 전부 지워진다.
+const parseCatText=text=>text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+  const [n,sb]=l.split(/[:：]/); const name=n.trim();
+  const out={name,subs:(sb||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean)};
+  const prev=S.cats.find(c=>c.name===name);
+  if(prev&&prev.owner){ out.owner=prev.owner; out.ownerName=prev.ownerName; }
+  return out;
+}).filter(c=>c.name);
 /* 쓰기 전에 로그인·이름 확인 */
 function ensureName(){ return new Promise(res=>{ if(!loggedIn()){ openLogin(); return res(false); } if(ME.name) return res(true); openNameForm(ok=>res(ok)); }); }
 
@@ -578,7 +632,7 @@ function render(){
 function row(it,i){
   const t=TYPES[it.type]||TYPES.note, open=S.sel===it.id;
   const sub=it.type==='link'||it.type==='file'?(it.body||it.url||''):(it.body||'').split('\n')[0];
-  const rp=S.admin?reportsFor(it.id).length:0;
+  const rp=isMod()?reportsFor(it.id).length:0;   // 볼 수 있는 신고만 S.reports 에 들어온다
   const cls='row'+(open||S.cursor===i?' sel':'')+(rp?' flag':'');
   const cs=colsOf(it.id); const voted=S.myVotes.includes(it.id);
   return `<div class="${cls}" data-id="${esc(it.id)}" data-i="${i}">
@@ -644,7 +698,15 @@ function renderRail(){
   });
   $('#catList').innerHTML=h;
   $('#catEdit').hidden=!S.admin; $('#catAi').hidden=!aiReady();
+  // 접힌 상태에서도 지금 무엇으로 걸러 보고 있는지 제목줄에 보인다
+  $('#typeCur').textContent=S.type==='all'?'':(TYPES[S.type]||{}).n||'';
+  $('#catCur').textContent=S.cat==='all'?'':S.cat+(S.sub?' › '+S.sub:'');
+  // 선택한 분야의 주 관리자
+  const oc=S.cat!=='all'?catOwner(S.cat):null, ol=$('#catOwnerLine');
+  if(oc){ ol.hidden=false; ol.innerHTML=oc.owner?`담당 <b>${esc(oc.owner===ME.id?(ME.name||oc.ownerName||'이름 없음'):(oc.ownerName||'이름 없음'))}</b>${oc.owner===ME.id?' (나)':''}`:'담당 <b>운영자</b>'; }
+  else ol.hidden=true;
   const cols=S.cols.slice().sort((a,b)=>(b.itemIds||[]).length-(a.itemIds||[]).length);
+  $('#colNum').textContent=cols.length?cols.length:'';
   $('#colList').innerHTML=cols.length?cols.map(c=>`<button class="f${S.col===c.id?' on':''}" data-col="${esc(c.id)}"><span class="lbl">▤&nbsp;${esc(c.title)}</span><span class="cnt">${(c.itemIds||[]).length}</span></button>`).join(''):'<span class="hint">모음은 주제별로 항목을 묶는 큐레이션입니다. 첫 모음을 만들어 보세요.</span>';
   const tc={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>tc[t]=(tc[t]||0)+1));
   const tags=Object.entries(tc).sort((a,b)=>b[1]-a[1]).slice(0,40);
@@ -658,7 +720,7 @@ function renderColHead(){
   el.innerHTML=`<div class="colhead"><div><div class="crumb">모음 · ${esc(c.by||'')} · ${rel(c.createdAt)}</div><h2>▤ ${esc(c.title)}</h2>${c.desc?`<p>${esc(c.desc)}</p>`:''}</div>
     <div class="sp">${own?`<button class="btn small" data-coledit="${esc(c.id)}">수정</button><button class="btn small ghost danger" data-coldel="${esc(c.id)}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
 }
-function renderReviewBtn(){ $('#reviewBtn').hidden=!S.admin; $('#reviewCnt').textContent=S.reports.length; }
+function renderReviewBtn(){ $('#reviewBtn').hidden=!isMod(); $('#reviewCnt').textContent=S.reports.length; }
 function renderReview(){
   const g={}; S.reports.forEach(r=>{ (g[r.itemId]=g[r.itemId]||[]).push(r) });
   const ids=Object.keys(g).sort((a,b)=>g[b].length-g[a].length);
@@ -687,6 +749,8 @@ document.querySelector('.rail').addEventListener('click',e=>{
   if(k) S.col=S.col===k.dataset.col?null:k.dataset.col;
   if(t||c||s||g||m||k){ S.cursor=-1; S.view='list'; render(); }
 });
+// 요약줄 안의 버튼은 접기/펴기를 일으키지 않는다
+document.querySelectorAll('.sec summary .acts button').forEach(b=>b.addEventListener('click',e=>{ e.preventDefault(); e.stopPropagation(); }));
 $('#catEdit').addEventListener('click',openCatEditor);
 $('#catAi').addEventListener('click',openAiOrganize);
 $('#colNew').addEventListener('click',()=>openColForm(null));
@@ -822,12 +886,23 @@ function openLogin(reason){
 }
 
 function openNameForm(cb){
-  modal(`${mh('이름 정하기')}<form id="nf"><div class="modal-b">
-    <label class="fld">올린 글에 표시될 이름<input name="n" maxlength="24" required placeholder="닉네임 또는 이름" value="${esc(ME.name)}"></label>
-    <div class="hint">다른 사람에게 이메일 대신 이 이름이 보입니다.</div>
+  const first=!ME.name, sug=first?(ME.suggestedName||''):'';   // 소셜 로그인 첫 진입이면 닉네임을 제안값으로
+  modal(`${mh(first?'표시할 이름 정하기':'이름 바꾸기')}<form id="nf"><div class="modal-b">
+    <label class="fld">다른 사람에게 보이는 이름<input name="n" maxlength="24" required placeholder="닉네임" value="${esc(ME.name||sug)}"></label>
+    <div class="hint">올린 자료마다 이 이름이 붙고, <b>로그인하지 않은 사람에게도 보입니다.</b> 본명 대신 닉네임을 권합니다.</div>
+    ${sug?`<div class="hint">카카오 닉네임을 미리 넣어 두었습니다. 그대로 쓰거나 지우고 새로 적으세요.</div>`:''}
+    ${!first?`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" name="past" checked> 예전에 올린 자료의 이름도 함께 바꾸기</label>`:''}
   </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary">저장</button></div></form>`,'narrow');
   const f=$('#nf'); f.n.focus(); f.n.select();
-  f.addEventListener('submit',async e=>{ e.preventDefault(); try{ await store.setName(f.n.value.trim()); closeModal(); render(); cb&&cb(true); }catch(x){ $('#err').textContent='저장하지 못했습니다 ('+(x.code||'오류')+')'; } });
+  f.addEventListener('submit',async e=>{
+    e.preventDefault(); const n=f.n.value.trim(); if(!n) return;
+    const btn=f.querySelector('[type=submit]'); btn.disabled=true;
+    try{
+      await store.setName(n);
+      if(f.past&&f.past.checked){ const c=await store.renamePast(n); if(c) toast(`예전 자료 ${c}개의 이름도 바꿨습니다`); }
+      closeModal(); render(); cb&&cb(true);
+    }catch(x){ btn.disabled=false; $('#err').textContent='저장하지 못했습니다 ('+(x.code||'오류')+')'; }
+  });
   if(cb) $('#veil').addEventListener('click',e=>{ if(e.target.closest('[data-close]')||e.target.id==='veil') cb(false); });
 }
 
@@ -979,6 +1054,36 @@ function openCatEditor(){
   });
 }
 
+/* ---------- 분야 주 관리자 지정 (운영자) ---------- */
+async function openCatOwners(){
+  if(!S.admin){ toast('운영자만 지정할 수 있습니다'); return; }
+  modal(`${mh('분야 주 관리자')}<div class="modal-b">
+    <p class="hint" style="font-size:12.5px;color:var(--muted);margin:0">분야마다 담당자를 정합니다. 담당자는 <b>그 분야의 자료를 수정·삭제하고 신고를 검토</b>할 수 있습니다.
+    지정하지 않으면 운영자가 담당합니다. 목록에는 이름을 정한 사람만 나옵니다.</p>
+    <div id="coBody" class="hint">불러오는 중…</div>
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>닫기</button></div>`);
+  let people=[];
+  try{ people=await store.people(); }
+  catch(x){ $('#coBody').textContent='사람 목록을 불러오지 못했습니다 ('+(x.code||'오류')+')'; return; }
+  const opts=id=>`<option value="">운영자 (지정 안 함)</option>`+people.map(p=>`<option value="${esc(p.id)}"${p.id===id?' selected':''}>${esc(p.name)}</option>`).join('');
+  $('#coBody').innerHTML=`<div class="checks" style="max-height:46vh">${S.cats.map((c,i)=>
+    `<label style="justify-content:space-between;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</span>
+      <select data-ci="${i}" style="flex:none;max-width:200px;border:1px solid var(--line2);background:var(--bg2);border-radius:7px;padding:6px 8px;font-size:13px;color:var(--text)">${opts(c.owner||'')}</select></label>`).join('')}</div>`;
+  $('#coBody').addEventListener('change',async e=>{
+    const sel=e.target.closest('[data-ci]'); if(!sel) return;
+    const i=+sel.dataset.ci, cat=S.cats[i]; if(!cat) return;
+    const pid=sel.value, person=people.find(p=>p.id===pid);
+    const next=S.cats.map((c,j)=>{ if(j!==i) return c;
+      const o={name:c.name,subs:c.subs};
+      if(pid&&person){ o.owner=pid; o.ownerName=person.name; }
+      return o; });
+    sel.disabled=true;
+    try{ await store.saveCategories(next); toast(pid?`${cat.name} 담당: ${person.name}`:`${cat.name} 담당을 운영자로 되돌렸습니다`); }
+    catch(x){ $('#err').textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+    sel.disabled=false;
+  });
+}
+
 /* ---------- AI 정리 (운영자): 항목 재분류 + 분야 구조 개편안 ---------- */
 function openAiOrganize(){
   if(!aiReady()){ toast('운영자만 쓸 수 있습니다'); return; }
@@ -1067,13 +1172,14 @@ function openAiOrganize(){
 function openMore(){
   modal(`${mh('더 보기')}<div class="modal-b"><div class="menu">
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
+    ${S.admin?`<button data-m="owners">분야 주 관리자 <small>분야마다 담당자 지정</small></button>`:''}
     ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 제안</small></button>`:''}
     ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
     <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개</div>
   </div>`,'narrow');
   $('#veil').addEventListener('click',async e=>{ const b=e.target.closest('[data-m]'); if(!b) return; const m=b.dataset.m;
-    if(m==='io') openIO(); else if(m==='ai') openAiOrganize(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
+    if(m==='io') openIO(); else if(m==='owners') openCatOwners(); else if(m==='ai') openAiOrganize(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
 }
 
 function openIO(){
@@ -1111,7 +1217,7 @@ function openIO(){
         const ex=S.cols.find(x=>x.id===c.id); if(ex&&!canEdit(ex)) continue;
         await store.putCol({id:String(c.id),title:String(c.title),desc:String(c.desc||''),itemIds:(Array.isArray(c.itemIds)?c.itemIds:[]).filter(okId),
           by:ex?ex.by:String(c.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(c.createdAt||new Date().toISOString())}); }
-      if(S.admin&&Array.isArray(j.categories)&&j.categories.length){ const merged=S.cats.slice(); normCats(j.categories).forEach(c=>{ const ex=merged.find(x=>x.name===c.name); if(ex) ex.subs=[...new Set([...ex.subs,...c.subs])]; else merged.push(c); }); await store.saveCategories(merged); }
+      if(S.admin&&Array.isArray(j.categories)&&j.categories.length){ const merged=S.cats.slice(); normCats(j.categories).forEach(c=>{ const ex=merged.find(x=>x.name===c.name); if(ex) ex.subs=[...new Set([...ex.subs,...c.subs])]; else merged.push({name:c.name,subs:c.subs}); }); await store.saveCategories(merged); }
       msg.textContent=`완료: ${ok}개 추가·갱신${fail?`, ${fail}개 건너뜀(권한 없음 또는 실패)`:''}`; toast(`${ok}개를 가져왔습니다`);
     }catch(x){ msg.textContent='읽을 수 없는 파일입니다: '+(x.message||x); }
     e.target.value='';
@@ -1128,13 +1234,21 @@ function setConn(kind){
 }
 document.title=CFG.SITE_NAME||'빠른 연결'; $('#siteName').textContent=CFG.SITE_NAME||'빠른 연결'; $('#siteTag').textContent=CFG.SITE_TAGLINE||'';
 // 태그 목록: 넓은 화면은 펼침, 모바일은 접힘 (사용자가 여닫으면 그대로 둠)
-(function(){ const mq=matchMedia('(max-width:820px)'); $('#tagBox').open=!mq.matches; })();
+(function(){
+  const narrow=matchMedia('(max-width:820px)').matches;
+  // 기본: 넓은 화면은 종류·분야·모음 펼침, 좁은 화면은 모두 접힘. 사용자가 여닫으면 그 선택을 기억한다.
+  [['typeBox',!narrow],['catBox',!narrow],['colBox',!narrow],['tagBox',!narrow]].forEach(([id,def])=>{
+    const el=$('#'+id); if(!el) return;
+    el.open=LS.get('toolbox.open.'+id,def);
+    el.addEventListener('toggle',()=>LS.set('toolbox.open.'+id,el.open));
+  });
+})();
 render();
 (function(){
   const ready=CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase;
   store=ready?SupabaseStore():LocalStore();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
-  store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||''}); S.admin=!!me.admin; render(); });
+  store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||'',suggestedName:me.suggestedName||''}); S.admin=!!me.admin; render(); });
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));

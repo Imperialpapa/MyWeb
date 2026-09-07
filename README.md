@@ -15,6 +15,8 @@
 | `supabase/seed-2.json` | 위와 같은 20개. 사이트의 ⋯ → 파일로 관리 → JSON 가져오기 용 |
 | `supabase/seed-3.sql` | **AI 에이전트** 분야 추가 + 자료 11개. SQL Editor 용 |
 | `supabase/seed-3.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
+| `supabase/seed-4.sql` | **유머** 분야 추가 + 자료 12개. SQL Editor 용 |
+| `supabase/seed-4.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
 | `supabase/functions/ai/index.ts` | **서비스 안 AI 에이전트** (Supabase Edge Function). 올릴 때 분류 제안, 운영자용 재분류·분야 구조 제안. Claude API 키는 여기서만 쓰임 |
 | `supabase/config.toml` | Supabase CLI 설정 (Edge Function 배포용) |
 | `.claude/agents/add-category.md` | Claude Code 서브에이전트. "○○ 분야 추가해줘" 하면 seed 파일과 기본 분야를 만들어 줌 |
@@ -148,6 +150,16 @@ update public.profiles set is_admin = true
 
 함수 코드를 고친 뒤에는 `npx supabase functions deploy ai` 만 다시 실행하면 됩니다. 로그는 Supabase 대시보드 **Edge Functions → ai → Logs** 에서 봅니다.
 
+## 분야 주 관리자
+
+분야마다 담당자를 정할 수 있습니다. **⋯ → 분야 주 관리자** 에서 운영자가 지정합니다. 지정하지 않으면 운영자가 담당합니다.
+
+담당자는 **맡은 분야에서만** 자료를 수정·삭제하고 신고를 검토할 수 있습니다. 다른 분야는 손댈 수 없고, 분야를 만들거나 지우거나 다른 담당자를 지정할 수는 없습니다. 이 경계는 화면이 아니라 데이터베이스 규칙(RLS)이 지킵니다.
+
+지정 목록에는 **이름을 정한 사람의 닉네임만** 나옵니다. 이메일 등 계정 정보는 화면에 나오지 않습니다.
+
+> 분야 이름을 바꾸면 담당자 지정이 풀립니다. 이름을 바꾼 뒤에는 담당자를 다시 지정해 주세요.
+
 ## 권한 요약
 
 | 행동 | 비로그인 | 로그인 | 운영자 |
@@ -158,7 +170,8 @@ update public.profiles set is_admin = true
 | 신고 | | O | O |
 | 수정·삭제 | | 내 것만 | 모두 |
 | AI 분류 제안 (새 항목 창) | | O | O |
-| 신고 검토함, 분야 편집, AI 정리 | | | O |
+| **맡은 분야**의 자료 수정·삭제, 신고 검토 | | 주 관리자만 | O |
+| 신고 검토함 전체, 분야 편집, 주 관리자 지정, AI 정리 | | | O |
 
 이 규칙은 화면이 아니라 데이터베이스(RLS)가 지키므로, 페이지를 고쳐도 우회할 수 없습니다.
 

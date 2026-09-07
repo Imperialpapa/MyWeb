@@ -258,8 +258,15 @@ ${catsText(cats)}
 
     return fail("알 수 없는 action 입니다: " + String(body.action || ""));
   } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) return fail("ANTHROPIC_API_KEY 가 올바르지 않습니다", 500);
-    if (e instanceof Anthropic.RateLimitError) return fail("AI 호출 한도에 걸렸습니다. 잠시 후 다시 시도해 주세요", 429);
+    // 우리 쪽 문제로 실패했으면 차감한 하루 한도를 돌려준다 (사용자 잘못이 아니다)
+    const ours = e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.APIConnectionError ||
+      e instanceof Anthropic.RateLimitError || (e instanceof Anthropic.APIError && (!e.status || e.status >= 500));
+    if (ours) { try { await sb.rpc("ai_refund_quota"); } catch { /* 환불 실패는 무시 */ } }
+
+    if (e instanceof Anthropic.AuthenticationError) {
+      return fail("AI 키가 만료되었거나 올바르지 않습니다. 운영자에게 알려 주세요 (README 7단계)", 500);
+    }
+    if (e instanceof Anthropic.RateLimitError) return fail("AI 호출이 몰리고 있습니다. 잠시 후 다시 시도해 주세요", 429);
     if (e instanceof Anthropic.APIConnectionError) return fail("AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요", 504);
     if (e instanceof Anthropic.APIError) return fail(`AI 서비스 오류 (${e.status ?? "연결"}): ${e.message}`, 502);
     return fail((e as Error).message || "알 수 없는 오류", 500);
