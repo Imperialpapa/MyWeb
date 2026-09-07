@@ -309,7 +309,7 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
    SupabaseStore: 실제 서비스.  LocalStore: 설정이 비어 있을 때 미리보기.
    ================================================================ */
 const CFG=window.TOOLBOX_CONFIG||{};
-const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]}];
+const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]},{name:'AI 에이전트',subs:[]}];
 const normCats=list=>(Array.isArray(list)?list:[]).map(c=>typeof c==='string'?{name:c,subs:[]}:{name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]}).filter(c=>c.name);
 const LS={get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v) }catch(e){ return d } },set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} }};
 

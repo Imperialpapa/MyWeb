@@ -119,7 +119,7 @@ create table if not exists public.settings (
 );
 insert into public.settings (key, value) values (
   'categories',
-  '{"list":[{"name":"개발·도구","subs":["웹","CLI·스크립트","디자인·문서","학습자료","프로젝트 운영"]},{"name":"생활·건강·취미","subs":["운동","식단","정보·공공","책·문화"]}]}'::jsonb
+  '{"list":[{"name":"개발·도구","subs":["웹","CLI·스크립트","디자인·문서","학습자료","프로젝트 운영"]},{"name":"생활·건강·취미","subs":["운동","식단","정보·공공","책·문화"]},{"name":"AI 에이전트","subs":["에이전트 도구","프레임워크·SDK","MCP·연동","프롬프트·스킬","학습자료"]}]}'::jsonb
 ) on conflict (key) do nothing;
 
 -- ============================================================

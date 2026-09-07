@@ -4,3 +4,4 @@ node_modules/
 .vercel/
 .netlify/
 *.log
+supabase/톡연계정보.txt

@@ -13,6 +13,9 @@
 | `supabase/seed.sql` | 초기 자료 18개 (선택) |
 | `supabase/seed-2.sql` | 추가 자료 20개 (개발·도구 10, 생활·건강·취미 10). SQL Editor 용 |
 | `supabase/seed-2.json` | 위와 같은 20개. 사이트의 ⋯ → 파일로 관리 → JSON 가져오기 용 |
+| `supabase/seed-3.sql` | **AI 에이전트** 분야 추가 + 자료 11개. SQL Editor 용 |
+| `supabase/seed-3.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
+| `.claude/agents/add-category.md` | Claude Code 서브에이전트. "○○ 분야 추가해줘" 하면 seed 파일과 기본 분야를 만들어 줌 |
 
 `config.js`가 비어 있으면 **미리보기 모드**로 동작합니다. 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다. `index.html`을 더블클릭해 열어 보세요.
 

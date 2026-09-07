@@ -1,5 +1,19 @@
 # 작업 기록
 
+## 2026-09-07
+
+### 분야
+- **AI 에이전트** 분야 추가 (하위: 에이전트 도구, 프레임워크·SDK, MCP·연동, 프롬프트·스킬, 학습자료)
+- `supabase/seed-3.sql`: settings.categories 에 분야를 합치는 SQL(중복 실행 안전) + 자료 11개
+- `supabase/seed-3.json`: 같은 내용. 운영자로 JSON 가져오기 하면 분야도 같이 들어감
+- `schema.sql` 기본 분야, `index.html` 미리보기 기본 분야(DEFAULT_CATS)에 반영
+
+### 에이전트
+- `.claude/agents/add-category.md`: 분야 추가 전담 Claude Code 서브에이전트. seed SQL/JSON 생성, 기본 분야·README 갱신, JSON 검증까지 수행
+
+### 기타
+- `.gitignore` 에 `supabase/톡연계정보.txt` 추가 (카카오 키 파일, 커밋 금지)
+
 ## 2026-09-04
 
 ### 배포
