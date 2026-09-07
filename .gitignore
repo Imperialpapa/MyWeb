@@ -5,3 +5,7 @@ node_modules/
 .netlify/
 *.log
 supabase/톡연계정보.txt
+
+# Supabase CLI 작업 폴더
+supabase/.temp/
+supabase/.branches/

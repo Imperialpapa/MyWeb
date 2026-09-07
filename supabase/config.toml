@@ -1,0 +1,7 @@
+# Supabase CLI 설정 (Edge Function 배포용)
+# 대시보드에서 만든 프로젝트와 연결: npx supabase link --project-ref <프로젝트 ref>
+project_id = "toolbox"
+
+[functions.ai]
+# 로그인 확인은 함수 안에서 직접 한다 (Supabase 의 새 publishable 키와 게이트웨이 JWT 검사가 충돌하는 문제 회피)
+verify_jwt = false

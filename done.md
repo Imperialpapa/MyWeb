@@ -12,6 +12,39 @@
 ### 에이전트
 - `.claude/agents/add-category.md`: 분야 추가 전담 Claude Code 서브에이전트. seed SQL/JSON 생성, 기본 분야·README 갱신, JSON 검증까지 수행
 
+### 서비스 안 AI 에이전트 (분류 담당)
+- `supabase/functions/ai/index.ts`: Supabase Edge Function. 브라우저 대신 Claude API(`claude-opus-5`, 구조화 출력)를 호출. 세 가지 일:
+  - `suggest` — 올릴 때 분야·하위분야·태그(빈 제목·설명도) 제안. 로그인 사용자
+  - `organize` — 항목 30개씩 다시 분류해 바꿀 것만 제안. 운영자
+  - `taxonomy` — 전체 자료를 보고 분야·하위분야 구조 개편안. 운영자
+  - 함수는 읽기만 하고, 적용은 브라우저가 사용자 권한(RLS)으로 함. 로그인·운영자 확인은 함수 안에서 직접
+- `index.html`: 새 항목 창에 **✦ AI 분류 제안** 버튼, 분야 옆·더 보기에 운영자용 **✦ AI 정리** 창(재분류 표 → 체크 적용, 구조 개편안 → 고쳐서 저장). `patch` 가 분야·태그도 고치도록 확장. 분야 텍스트 파싱을 `catsToText`/`parseCatText` 로 분리
+- `config.js` `AI: true` 스위치. `supabase/config.toml`(함수 JWT 게이트웨이 검사 끔), `.gitignore` 에 CLI 작업 폴더
+- README 7단계 "AI 기능 켜기" (Anthropic 키 발급 → `npx supabase` 로 secret 등록·배포)
+- **아직 배포 전**: `npx supabase login` 은 브라우저 로그인이 필요해 사용자가 직접 실행해야 함 (todo 참고)
+
+### 코드 감사 (다중 에이전트, 발견 83건)
+6개 관점(로직·보안·Edge Function·성능·데이터·UX)으로 탐색한 뒤 발견마다 3명이 반박을 시도하는 방식으로 검증. **고친 것:**
+
+| 문제 | 고친 곳 |
+|---|---|
+| **저장형 XSS** — 항목·모음·신고의 id 가 `data-*` 속성에 이스케이프 없이 들어가, 로그인한 누구나 방문자(운영자 포함) 브라우저에서 스크립트를 실행시킬 수 있었음 | `index.html` 속성 15곳 `esc()`, 가져오기 id 검증, `schema.sql` id 형식 제약 |
+| **운영자가 남의 항목을 수정하면 항상 42501 실패** — `upsert` 는 Postgres 가 INSERT 정책(`owner_id = auth.uid()`)을 새 행에도 적용한다 | `put`/`putCol` 을 insert/update 로 분리. 수정 시 `owner_id` 를 안 보내므로 소유권 이전 문제도 사라짐 |
+| **백업 복원이 소유권을 빼앗음** — JSON 가져오기가 모든 항목의 `owner_id` 를 가져온 사람으로 덮어씀 | 기존 항목은 `by`·`ownerId`·`createdAt`·`updatedAt` 유지 |
+| **AI 호출 비용 무제한** — 로그인만 하면 횟수·입력 크기 제한 없이 호출 가능 | `ai_take_quota` 함수(하루 40회, 운영자 600회), 본문 32KB·필드별 길이 상한 |
+| **AI 응답이 잘려 실패** — `claude-opus-5` 는 thinking 이 기본 켜짐이고 `max_tokens` 는 (thinking + 응답) 합계 상한 | 4096 / 16000 / 16000 으로 상향, taxonomy 는 effort medium |
+| `javascript:` 링크가 그대로 href 로 렌더 | `safeUrl()` 로 http(s)·mailto 만 허용 |
+| 추천 수를 항목 주인이 REST 로 직접 조작 가능 | `votes` 컬럼 update 권한 회수 (트리거만 변경) |
+| 한글 입력 확정 Enter 가 검색창을 벗어나 첫 항목을 여는 오동작 | `isComposing` 확인 |
+| 버튼·링크 포커스 상태의 Enter 를 가로챔 | 대상 태그 확인 |
+| 종류를 바꿔 URL 칸을 숨겨도 `type=url` 검증이 남아 저장이 조용히 실패 | 숨길 때 `disabled` |
+| AI 정리 창을 닫아도 배치 호출이 계속되고 TypeError | 창 존재 확인 후 중단 |
+| 조회 실패가 "아직 항목이 없습니다" 로 표시 | 실패 메시지 별도 표시 |
+| iOS 에서 입력칸 포커스마다 화면 확대 | 좁은 화면 입력칸 16px |
+| 인덱스 부족 (분야 필터, votes 의 RLS 필터) | `items_category_idx`, `votes_user_idx` |
+
+**안 고치고 남긴 것** (todo.md 참고): 전체 재렌더·전체 테이블 재조회 같은 성능 개선, URL 라우팅, 접근성(포커스 트랩·aria-live·명도 대비), `.limit(5000)` 이 Supabase 기본 1000행에 잘리는 문제.
+
 ### 기타
 - `.gitignore` 에 `supabase/톡연계정보.txt` 추가 (카카오 키 파일, 커밋 금지)
 

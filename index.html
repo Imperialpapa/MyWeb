@@ -64,6 +64,8 @@ a{color:var(--link)}
 .search .kbd{position:absolute;right:10px;top:10px;display:flex;gap:4px}
 .kbd span{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);border-radius:4px;padding:1px 5px;background:var(--bg2)}
 @media(max-width:600px){.search .kbd{display:none}.search input{padding-right:12px}.top-in{padding:10px 12px;gap:8px}.brand-name{display:none}}
+/* iOS Safari 는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다 */
+@media(max-width:600px){.search input,.fld input,.fld textarea,.fld select{font-size:16px}}
 .btn{height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--line2);background:var(--surface);color:var(--text);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;text-decoration:none}
 .btn:hover{background:var(--surface2)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
@@ -221,6 +223,24 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
 .menu button:hover{background:var(--surface2)}
 .menu button small{color:var(--muted)}
 
+/* ---------- AI ---------- */
+.modal.wide{max-width:900px}
+.ai-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ai-sec{border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.ai-sec h3{margin:0;font-size:14px;font-weight:600}
+.ai-sec p{margin:0}
+.ai-opts{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}
+.ai-opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.ai-opts b{font-family:var(--mono);font-weight:500;color:var(--muted)}
+.ai-wrap{max-height:48vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.ai-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.ai-tbl th,.ai-tbl td{padding:6px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+.ai-tbl th{color:var(--muted);font-weight:500;font-size:11.5px;position:sticky;top:0;background:var(--surface);border-top:0}
+.ai-old{color:var(--faint)}
+.ai-new{color:var(--good)}
+.ai-tag{font-size:10.5px;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:0 5px;white-space:nowrap}
+.ai-notes{margin:0;padding-left:18px;color:var(--muted);font-size:12.5px;line-height:1.6}
+
 /* ---------- toast ---------- */
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 14px;border-radius:8px;font-size:13px;z-index:60;box-shadow:var(--shadow);opacity:0;transition:opacity .15s;pointer-events:none;max-width:90vw}
 .toast.show{opacity:1}
@@ -255,7 +275,7 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
       <div class="rail-list" id="typeList"></div>
     </section>
     <section>
-      <h4>분야 <button id="catEdit" hidden title="분야·하위분야 편집">편집</button></h4>
+      <h4>분야 <span><button id="catEdit" hidden title="분야·하위분야 편집">편집</button><button id="catAi" hidden title="AI 로 항목 재분류·분야 구조 제안">✦ AI 정리</button></span></h4>
       <div class="rail-list" id="catList"></div>
     </section>
     <section>
@@ -305,10 +325,13 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
      addReport(r) / removeReports(ids)
      vote(id) → 'added' | 'dup'
      saveCategories(list)     list = [{name, subs:[...]}]   (운영자만)
+     ai(action, payload)      Edge Function 'ai' 호출. suggest / organize / taxonomy
      auth: onAuth(cb), login(email), logout(), setName(name)
    SupabaseStore: 실제 서비스.  LocalStore: 설정이 비어 있을 때 미리보기.
    ================================================================ */
 const CFG=window.TOOLBOX_CONFIG||{};
+let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
+const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
 const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]},{name:'AI 에이전트',subs:[]}];
 const normCats=list=>(Array.isArray(list)?list:[]).map(c=>typeof c==='string'?{name:c,subs:[]}:{name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]}).filter(c=>c.name);
 const LS={get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v) }catch(e){ return d } },set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} }};
@@ -337,6 +360,7 @@ function LocalStore(){
     async removeReports(ids){ D.reports=D.reports.filter(x=>!ids.includes(x.id)); LS.set(K.reports,D.reports); emit() },
     async vote(id){ if(D.votes.includes(id)) return 'dup'; D.votes.push(id); LS.set(K.votes,D.votes); const i=D.items.findIndex(x=>x.id===id); if(i>=0) D.items[i].votes=(D.items[i].votes||0)+1; LS.set(K.items,D.items); emit(); return 'added' },
     async saveCategories(list){ D.cats=normCats(list); LS.set(K.cats,D.cats); emit() },
+    async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
   };
 }
 
@@ -355,7 +379,9 @@ function SupabaseStore(){
   const fail=(e,what)=>{ const err=new Error(e.message||what); err.code=e.code||'error'; throw err; };
   // 읽기
   async function load(t){
-    if(t==='items'){ const {data,error}=await sb.from('items').select('*').order('created_at',{ascending:false}).limit(5000); if(!error) D.items=(data||[]).map(fromItem); }
+    if(t==='items'){ const {data,error}=await sb.from('items').select('*').order('created_at',{ascending:false}).limit(5000);
+      // 조회 실패를 조용히 넘기면 '아직 항목이 없습니다' 로 잘못 보인다
+      if(error){ DB_ERR=error.message||'자료를 불러오지 못했습니다'; setConn('err'); } else { DB_ERR=''; D.items=(data||[]).map(fromItem); } }
     if(t==='collections'){ const {data,error}=await sb.from('collections').select('*'); if(!error) D.cols=(data||[]).map(fromCol); }
     if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(!error) D.reports=(data||[]).map(fromRep); } }
     if(t==='settings'){ const {data}=await sb.from('settings').select('value').eq('key','categories').maybeSingle(); const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; }
@@ -406,15 +432,48 @@ function SupabaseStore(){
     },
     async logout(){ await sb.auth.signOut(); },
     async setName(n){ const {error}=await sb.from('profiles').update({name:n}).eq('id',me.id); if(error) fail(error); me.name=n; authCb&&authCb(me); },
-    async put(it){ const {error}=await sb.from('items').upsert(toItem(it)); if(error) fail(error); bump('items'); },
-    async patch(id,p){ const row={}; if('votes' in p) row.votes=p.votes; if('title' in p) row.title=p.title; const {error}=await sb.from('items').update(row).eq('id',id); if(error) fail(error); bump('items'); },
+    // 신규는 insert, 수정은 update. upsert 를 쓰면 Postgres 가 INSERT 정책(owner_id=auth.uid())까지 새 행에 적용해
+    // 운영자가 남의 항목을 고칠 때 항상 42501 이 난다. 수정 시 owner_id·created_at 은 보내지 않아 소유권도 지킨다.
+    async put(it){
+      const row=toItem(it);
+      const upd=()=>{ const {owner_id,created_at,...rest}=row; return sb.from('items').update(rest).eq('id',it.id) };
+      if(D.items.some(x=>x.id===it.id)){ const {error}=await upd(); if(error) fail(error); }
+      else{
+        const {error}=await sb.from('items').insert(row);
+        if(error){ if(error.code!=='23505') fail(error); const {error:e2}=await upd(); if(e2) fail(e2); }   // 이미 있던 행이면 수정으로
+      }
+      bump('items');
+    },
+    async patch(id,p){ const row={}; ['title','category','sub','tags','body'].forEach(k=>{ if(k in p) row[k]=p[k]; }); if('updatedAt' in p) row.updated_at=p.updatedAt; const {error}=await sb.from('items').update(row).eq('id',id); if(error) fail(error); bump('items'); },
     async remove(id){ const {error}=await sb.from('items').delete().eq('id',id); if(error) fail(error); bump('items'); },
-    async putCol(c){ const {error}=await sb.from('collections').upsert(toCol(c)); if(error) fail(error); bump('collections'); },
+    async putCol(c){
+      const row=toCol(c);
+      const upd=()=>{ const {owner_id,created_at,...rest}=row; return sb.from('collections').update(rest).eq('id',c.id) };
+      if(D.cols.some(x=>x.id===c.id)){ const {error}=await upd(); if(error) fail(error); }
+      else{
+        const {error}=await sb.from('collections').insert(row);
+        if(error){ if(error.code!=='23505') fail(error); const {error:e2}=await upd(); if(e2) fail(e2); }
+      }
+      bump('collections');
+    },
     async removeCol(id){ const {error}=await sb.from('collections').delete().eq('id',id); if(error) fail(error); bump('collections'); },
     async addReport(r){ const {error}=await sb.from('reports').insert({id:r.id,item_id:r.itemId,reason:r.reason,note:r.note||'',by:r.by||'',reporter_id:me.id}); if(error) fail(error); bump('reports'); },
     async removeReports(ids){ if(!ids.length) return; const {error}=await sb.from('reports').delete().in('id',ids); if(error) fail(error); bump('reports'); },
     async vote(id){ const {error}=await sb.from('votes').insert({item_id:id,user_id:me.id}); if(error){ if(error.code==='23505') return 'dup'; fail(error); } D.myVotes.push(id); bump('items'); return 'added'; },
     async saveCategories(list){ const {error}=await sb.from('settings').upsert({key:'categories',value:{list:normCats(list)},updated_at:new Date().toISOString()}); if(error) fail(error); bump('settings'); },
+    // AI: Edge Function 'ai' 에 요청. 로그인 토큰은 supabase-js 가 자동으로 붙인다
+    async ai(action,payload){
+      const {data,error}=await sb.functions.invoke('ai',{body:{action,...(payload||{})}});
+      if(error){
+        let msg=error.message||'AI 호출에 실패했습니다'; const ctx=error.context;
+        if(ctx&&ctx.status===404) msg='AI 기능이 아직 배포되지 않았습니다 (README 7단계)';
+        else if(ctx&&typeof ctx.json==='function'){ try{ const j=await ctx.json(); if(j&&j.error) msg=j.error; }catch(e){} }
+        else if(/Failed to send|fetch/i.test(msg)) msg='AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요';
+        const err=new Error(msg); err.code=(ctx&&ctx.status)||'ai'; throw err;
+      }
+      if(data&&data.error){ const err=new Error(data.error); err.code='ai'; throw err; }
+      return data||{};
+    },
   };
 }
 
@@ -436,12 +495,22 @@ let store=null;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=(p='i')=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+/* 링크 주소: http(s)/mailto 만 허용. javascript: 같은 스킴은 빈 값으로 (클릭 시 스크립트 실행 방지) */
+const safeUrl=u=>{ const s=String(u||'').trim(); return /^(https?:|mailto:)/i.test(s)?s:'' };
+/* id 형식: 화면 속성·DB 키로 쓰이므로 영문·숫자·_-만 허용 */
+const okId=v=>/^[A-Za-z0-9_-]{1,64}$/.test(String(v||''));
 const host=u=>{ try{ return new URL(u).hostname.replace(/^www\./,'') }catch(e){ return '' } };
 const rel=iso=>{ const d=(Date.now()-new Date(iso).getTime())/1000; if(isNaN(d))return ''; if(d<3600)return Math.max(1,Math.round(d/60))+'분 전'; if(d<86400)return Math.round(d/3600)+'시간 전'; if(d<86400*30)return Math.round(d/86400)+'일 전'; return new Date(iso).toLocaleDateString('ko-KR',{year:'2-digit',month:'numeric',day:'numeric'}) };
 let toastT; function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2800); }
 const loggedIn=()=>!!ME.id;
 const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id);
 const myReported=()=>new Set(S.reports.filter(r=>r.reporterId===ME.id).map(r=>r.itemId));
+/* AI: 운영자용 정리 도구는 공유 저장소 + 운영자일 때만, 분류 제안 버튼은 공유 저장소 + 로그인일 때 */
+const aiOn=()=>AI_ON&&!!store&&store.kind==='db';
+const aiReady=()=>aiOn()&&S.admin;
+const topTagsLocal=(n=40)=>{ const c={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>c[t]=(c[t]||0)+1)); return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n).map(([t])=>t); };
+const catsToText=list=>list.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
+const parseCatText=text=>text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{ const [n,s]=l.split(/[:：]/); return {name:n.trim(),subs:(s||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean)} }).filter(c=>c.name);
 /* 쓰기 전에 로그인·이름 확인 */
 function ensureName(){ return new Promise(res=>{ if(!loggedIn()){ openLogin(); return res(false); } if(ME.name) return res(true); openNameForm(ok=>res(ok)); }); }
 
@@ -498,6 +567,7 @@ function render(){
   $('#count').innerHTML=`<b>${list.length}</b>개 · 전체 ${S.items.length}개`;
   const el=$('#list');
   if(!list.length){
+    if(DB_ERR){ el.innerHTML=`<div class="empty"><b>자료를 불러오지 못했습니다</b>${esc(DB_ERR)}<br>새로고침해 보시고, 계속되면 운영자에게 알려 주세요.</div>`; return; }
     const anyFilter=S.q||S.type!=='all'||S.cat!=='all'||S.tag||S.col||S.mine;
     el.innerHTML=`<div class="empty"><b>${anyFilter?'검색 결과가 없습니다':'아직 항목이 없습니다'}</b>${anyFilter?'다른 단어로 찾거나 필터를 지워 보세요. <code>type:</code> <code>cat:</code> <code>#태그</code> 문법을 쓸 수 있습니다.':'오른쪽 위 <code>＋ 추가</code> 로 첫 자료를 올려 보세요.'}</div>`;
     return;
@@ -511,7 +581,7 @@ function row(it,i){
   const rp=S.admin?reportsFor(it.id).length:0;
   const cls='row'+(open||S.cursor===i?' sel':'')+(rp?' flag':'');
   const cs=colsOf(it.id); const voted=S.myVotes.includes(it.id);
-  return `<div class="${cls}" data-id="${it.id}" data-i="${i}">
+  return `<div class="${cls}" data-id="${esc(it.id)}" data-i="${i}">
     <span class="kind ${it.type}">${t.k}</span>
     <div class="row-main">
       <div class="row-title">${hl(it.title||'(제목 없음)')}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}${it.lang?`<span class="host">${esc(it.lang)}</span>`:''}</div>
@@ -519,7 +589,7 @@ function row(it,i){
       <div class="row-meta">${it.category?`<span class="chip cat">${esc(it.category)}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
     </div>
     <div class="row-side">
-      <button class="vote${voted?' done':''}" data-vote="${it.id}" title="추천">▲ <span class="num">${it.votes||0}</span></button>
+      <button class="vote${voted?' done':''}" data-vote="${esc(it.id)}" title="추천">▲ <span class="num">${it.votes||0}</span></button>
       <span>${rel(it.createdAt)}</span>
     </div>
     ${open?detail(it):''}
@@ -529,16 +599,17 @@ function detail(it){
   let body='';
   if(it.type==='snippet') body=`<pre>${esc(it.body||'')}</pre>`;
   else if(it.body) body=`<div class="body">${esc(it.body)}</div>`;
-  const url=it.url?`<div class="url" style="margin-top:${body?10:0}px"><a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.url)}</a></div>`:'';
+  const su=safeUrl(it.url);
+  const url=it.url?`<div class="url" style="margin-top:${body?10:0}px">${su?`<a href="${esc(su)}" target="_blank" rel="noopener">${esc(it.url)}</a>`:`${esc(it.url)} <span class="chip warn">열 수 없는 주소</span>`}</div>`:'';
   const own=canEdit(it); const rep=myReported().has(it.id);
   return `<div class="detail" data-stop>
     ${body}${url}
     <div class="actions">
-      ${it.url?`<a class="btn small" href="${esc(it.url)}" target="_blank" rel="noopener">열기 ↗</a>`:''}
-      ${it.type==='snippet'?`<button class="btn small" data-copy="${it.id}">코드 복사</button>`:''}
-      ${it.url?`<button class="btn small" data-copyurl="${it.id}">주소 복사</button>`:''}
-      <button class="btn small" data-tocol="${it.id}">▤ 모음에 담기</button>
-      ${own?`<button class="btn small" data-edit="${it.id}">수정</button><button class="btn small ghost danger" data-del="${it.id}">삭제</button>`:`<button class="btn small ghost${rep?'':' danger'}" data-report="${it.id}" ${rep?'disabled':''}>${rep?'신고됨':'신고'}</button>`}
+      ${su?`<a class="btn small" href="${esc(su)}" target="_blank" rel="noopener">열기 ↗</a>`:''}
+      ${it.type==='snippet'?`<button class="btn small" data-copy="${esc(it.id)}">코드 복사</button>`:''}
+      ${it.url?`<button class="btn small" data-copyurl="${esc(it.id)}">주소 복사</button>`:''}
+      <button class="btn small" data-tocol="${esc(it.id)}">▤ 모음에 담기</button>
+      ${own?`<button class="btn small" data-edit="${esc(it.id)}">수정</button><button class="btn small ghost danger" data-del="${esc(it.id)}">삭제</button>`:`<button class="btn small ghost${rep?'':' danger'}" data-report="${esc(it.id)}" ${rep?'disabled':''}>${rep?'신고됨':'신고'}</button>`}
       <span class="by">${it.by?esc(it.by)+' · ':''}${new Date(it.createdAt).toLocaleString('ko-KR')}${it.updatedAt?' · 수정됨':''}${it.ownerId&&it.ownerId===ME.id?' · 내 글':''}</span>
     </div>
   </div>`;
@@ -572,9 +643,9 @@ function renderRail(){
     }
   });
   $('#catList').innerHTML=h;
-  $('#catEdit').hidden=!S.admin;
+  $('#catEdit').hidden=!S.admin; $('#catAi').hidden=!aiReady();
   const cols=S.cols.slice().sort((a,b)=>(b.itemIds||[]).length-(a.itemIds||[]).length);
-  $('#colList').innerHTML=cols.length?cols.map(c=>`<button class="f${S.col===c.id?' on':''}" data-col="${c.id}"><span class="lbl">▤&nbsp;${esc(c.title)}</span><span class="cnt">${(c.itemIds||[]).length}</span></button>`).join(''):'<span class="hint">모음은 주제별로 항목을 묶는 큐레이션입니다. 첫 모음을 만들어 보세요.</span>';
+  $('#colList').innerHTML=cols.length?cols.map(c=>`<button class="f${S.col===c.id?' on':''}" data-col="${esc(c.id)}"><span class="lbl">▤&nbsp;${esc(c.title)}</span><span class="cnt">${(c.itemIds||[]).length}</span></button>`).join(''):'<span class="hint">모음은 주제별로 항목을 묶는 큐레이션입니다. 첫 모음을 만들어 보세요.</span>';
   const tc={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>tc[t]=(tc[t]||0)+1));
   const tags=Object.entries(tc).sort((a,b)=>b[1]-a[1]).slice(0,40);
   $('#tagList').innerHTML=tags.length?tags.map(([t,n])=>`<span class="tag${S.tag===t?' on':''}" data-tag="${esc(t)}">#${esc(t)} <span class="num">${n}</span></span>`).join(''):'<span class="hint">태그가 붙은 항목이 생기면 여기에 모입니다.</span>';
@@ -585,7 +656,7 @@ function renderColHead(){
   if(!c){ el.innerHTML=''; return; }
   const own=canEdit(c);
   el.innerHTML=`<div class="colhead"><div><div class="crumb">모음 · ${esc(c.by||'')} · ${rel(c.createdAt)}</div><h2>▤ ${esc(c.title)}</h2>${c.desc?`<p>${esc(c.desc)}</p>`:''}</div>
-    <div class="sp">${own?`<button class="btn small" data-coledit="${c.id}">수정</button><button class="btn small ghost danger" data-coldel="${c.id}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
+    <div class="sp">${own?`<button class="btn small" data-coledit="${esc(c.id)}">수정</button><button class="btn small ghost danger" data-coldel="${esc(c.id)}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
 }
 function renderReviewBtn(){ $('#reviewBtn').hidden=!S.admin; $('#reviewCnt').textContent=S.reports.length; }
 function renderReview(){
@@ -597,7 +668,7 @@ function renderReview(){
     const it=S.items.find(x=>x.id===id); const rs=g[id];
     return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(it.category||'')}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
       <ul>${rs.map(r=>`<li>${esc(REASONS[r.reason]||r.reason)}${r.note?' — '+esc(r.note):''} <span class="hint">(${esc(r.by||'익명')}, ${rel(r.createdAt)})</span></li>`).join('')}</ul></div>
-      <div class="acts">${it?`<button class="btn small" data-open="${id}">보기</button><button class="btn small danger" data-rvdel="${id}">항목 삭제</button>`:''}<button class="btn small ghost" data-rvclear="${id}">신고 닫기</button></div></div>`;
+      <div class="acts">${it?`<button class="btn small" data-open="${esc(id)}">보기</button><button class="btn small danger" data-rvdel="${esc(id)}">항목 삭제</button>`:''}<button class="btn small ghost" data-rvclear="${esc(id)}">신고 닫기</button></div></div>`;
   }).join('')+'</div>';
 }
 
@@ -617,6 +688,7 @@ document.querySelector('.rail').addEventListener('click',e=>{
   if(t||c||s||g||m||k){ S.cursor=-1; S.view='list'; render(); }
 });
 $('#catEdit').addEventListener('click',openCatEditor);
+$('#catAi').addEventListener('click',openAiOrganize);
 $('#colNew').addEventListener('click',()=>openColForm(null));
 $('#home').addEventListener('click',e=>{ e.preventDefault(); Object.assign(S,{q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'}); $('#q').value=''; render(); });
 $('#colHead').addEventListener('click',e=>{
@@ -646,7 +718,9 @@ $('#addBtn').addEventListener('click',()=>openForm(null));
 $('#moreBtn').addEventListener('click',openMore);
 $('#reviewBtn').addEventListener('click',()=>{ S.view=S.view==='review'?'list':'review'; render(); });
 document.addEventListener('keydown',e=>{
+  if(e.isComposing||e.keyCode===229) return;                                 // 한글 조합 중(IME)에는 단축키를 잡지 않는다
   const inField=/input|textarea|select/i.test(e.target.tagName);
+  const onControl=/button|a|summary|details/i.test(e.target.tagName);        // 버튼·링크에 포커스가 있으면 Enter 는 그쪽 몫
   if(e.key==='Escape'){ if($('#modalRoot').firstChild){ closeModal(); return; } if(inField){ e.target.blur(); } else if(S.sel){ S.sel=null; render(); } return; }
   if($('#modalRoot').firstChild||S.view!=='list') return;
   if(e.key==='/'&&!inField){ e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
@@ -657,7 +731,7 @@ document.addEventListener('keydown',e=>{
     S.cursor=e.key==='ArrowDown'?Math.min(n-1,S.cursor+1):Math.max(0,S.cursor-1);
     render(); const r=$('#list').querySelector(`[data-i="${S.cursor}"]`); r&&r.scrollIntoView({block:'nearest'});
   }
-  if(e.key==='Enter'&&(!inField||e.target.id==='q')){
+  if(e.key==='Enter'&&!onControl&&(!inField||e.target.id==='q')){
     const list=filtered(); const it=list[S.cursor>=0?S.cursor:0]; if(!it) return;
     e.preventDefault(); if(inField) e.target.blur();
     S.sel=S.sel===it.id?null:it.id; if(S.cursor<0)S.cursor=0; render();
@@ -773,12 +847,14 @@ async function openForm(it){
         <label class="fld">하위분야<input name="sub" list="subOpts" value="${esc(d.sub||'')}" placeholder="새 이름을 쓰면 만들어집니다"><datalist id="subOpts"></datalist></label>
       </div>
       <label class="fld">태그<input name="tags" placeholder="쉼표로 구분: docker, 정리" value="${esc((d.tags||[]).join(', '))}"></label>
+      ${aiOn()?`<div class="ai-row"><button type="button" class="btn small" id="aiBtn">✦ AI 분류 제안</button><span class="hint" id="aiMsg">제목이나 주소를 넣고 누르면 분야·하위분야·태그를 채워 줍니다. 저장 전에 고칠 수 있습니다.</span></div>`:''}
     </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">${edit?'저장':'추가'}</button></div></form>`);
   const form=$('#form'); let type=d.type;
   function subOpts(){ const c=S.cats.find(x=>x.name===form.category.value); const set=new Set(c?c.subs:[]); S.items.forEach(i=>{ if(i.category===form.category.value&&i.sub) set.add(i.sub) }); $('#subOpts').innerHTML=[...set].map(s=>`<option value="${esc(s)}">`).join(''); }
   function applyType(){
     $('#types').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===type));
-    $('#fUrl').hidden=type==='note'||type==='snippet';
+    const noUrl=type==='note'||type==='snippet';
+    $('#fUrl').hidden=noUrl; form.url.disabled=noUrl;   // 숨긴 칸의 type=url 검증이 저장을 조용히 막지 않도록
     $('#fLang').hidden=type==='link'||type==='note';
     form.body.classList.toggle('code',type==='snippet');
     $('#bodyLabel').textContent={link:'한 줄 설명',note:'내용',snippet:'코드',file:'설명'}[type];
@@ -790,6 +866,22 @@ async function openForm(it){
   form.category.addEventListener('change',subOpts);
   $('#types').addEventListener('click',e=>{ const b=e.target.closest('[data-t]'); if(b){ type=b.dataset.t; applyType(); } });
   form.url.addEventListener('blur',()=>{ if(!form.title.value&&form.url.value) form.title.value=host(form.url.value); });
+  const aiBtn=$('#aiBtn'); if(aiBtn) aiBtn.addEventListener('click',async()=>{
+    const f=form, msg=$('#aiMsg');
+    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':f.url.value.trim(),lang:f.lang.value.trim(),body:f.body.value.trim(),category:f.category.value,sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
+    if(!(item.title||item.url||item.body)){ msg.textContent='제목, 주소, 내용 중 하나는 먼저 적어 주세요.'; return; }
+    aiBtn.disabled=true; msg.textContent='AI 가 살펴보는 중…';
+    try{
+      const r=await store.ai('suggest',{item,tagsHint:topTagsLocal()});
+      if(r.category){ if(![...f.category.options].some(o=>o.value===r.category)) f.category.add(new Option(r.category)); f.category.value=r.category; subOpts(); }
+      if(r.sub) f.sub.value=r.sub;
+      if(Array.isArray(r.tags)&&r.tags.length) f.tags.value=[...new Set([...item.tags,...r.tags.map(String)])].join(', ');
+      if(r.title&&(!item.title||item.title===host(item.url))) f.title.value=r.title;
+      if(r.body&&!item.body&&type==='link') f.body.value=r.body;
+      msg.innerHTML=`<span class="ai-new">✦ 제안을 넣었습니다:</span> ${esc(r.category||'')}${r.sub?' › '+esc(r.sub):''}${r.newSub?' <span class="ai-tag">새 하위분야</span>':''}${r.reason?' · '+esc(r.reason):''}`;
+    }catch(x){ msg.textContent='AI 제안 실패: '+(x.message||x.code||'오류'); }
+    aiBtn.disabled=false;
+  });
   form.addEventListener('submit',async e=>{
     e.preventDefault(); const f=form, err=$('#err'); err.textContent='';
     const item={
@@ -842,7 +934,7 @@ async function openPicker(it){
   const mine=S.cols.filter(c=>canEdit(c)), others=S.cols.filter(c=>!canEdit(c)&&(c.itemIds||[]).includes(it.id));
   modal(`${mh('모음에 담기')}<div class="modal-b">
     <div class="hint" style="font-size:12.5px;color:var(--muted)">"${esc(it.title)}"</div>
-    <div class="checks" id="pk">${mine.length?mine.map(c=>`<label><input type="checkbox" value="${c.id}" ${(c.itemIds||[]).includes(it.id)?'checked':''}>▤ ${esc(c.title)}<span class="own">${(c.itemIds||[]).length}개</span></label>`).join(''):'<div class="hint">아직 내가 만든 모음이 없습니다. 아래에서 새로 만들면 바로 담깁니다.</div>'}
+    <div class="checks" id="pk">${mine.length?mine.map(c=>`<label><input type="checkbox" value="${esc(c.id)}" ${(c.itemIds||[]).includes(it.id)?'checked':''}>▤ ${esc(c.title)}<span class="own">${(c.itemIds||[]).length}개</span></label>`).join(''):'<div class="hint">아직 내가 만든 모음이 없습니다. 아래에서 새로 만들면 바로 담깁니다.</div>'}
     ${others.length?`<div class="hint" style="margin-top:6px">다른 사람 모음: ${others.map(c=>esc(c.title)).join(', ')}</div>`:''}</div>
     <form id="pkNew" style="display:flex;gap:6px"><input name="t" placeholder="새 모음 이름" maxlength="40" style="flex:1;border:1px solid var(--line2);background:var(--bg2);border-radius:7px;padding:7px 10px"><button class="btn">만들어서 담기</button></form>
   </div><div class="modal-f"><button type="button" class="btn" data-close>닫기</button></div>`,'narrow');
@@ -875,28 +967,113 @@ async function openReportForm(it){
 }
 
 function openCatEditor(){
-  const text=S.cats.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
   modal(`${mh('분야 편집')}<form id="ce"><div class="modal-b">
-    <label class="fld">한 줄에 분야 하나. 콜론 뒤에 하위분야를 쉼표로<textarea name="t" class="code" style="min-height:180px">${esc(text)}</textarea></label>
+    <label class="fld">한 줄에 분야 하나. 콜론 뒤에 하위분야를 쉼표로<textarea name="t" class="code" style="min-height:180px">${esc(catsToText(S.cats))}</textarea></label>
     <div class="hint">이름을 바꾸면 기존 항목의 분야 이름은 그대로 남습니다. 항목의 분야를 함께 바꾸려면 각 항목을 수정해 주세요.</div>
   </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary">저장</button></div></form>`);
   $('#ce').addEventListener('submit',async e=>{
     e.preventDefault();
-    const list=e.target.t.value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{ const [n,s]=l.split(/[:：]/); return {name:n.trim(),subs:(s||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean)} }).filter(c=>c.name);
+    const list=parseCatText(e.target.t.value);
     if(!list.length){ $('#err').textContent='분야가 하나는 있어야 합니다.'; return; }
     try{ await store.saveCategories(list); closeModal(); toast('분야를 저장했습니다'); }catch(x){ $('#err').textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+  });
+}
+
+/* ---------- AI 정리 (운영자): 항목 재분류 + 분야 구조 개편안 ---------- */
+function openAiOrganize(){
+  if(!aiReady()){ toast('운영자만 쓸 수 있습니다'); return; }
+  const empty=S.items.filter(i=>!i.category&&!i.example), vis=filtered().filter(i=>!i.example);
+  modal(`${mh('✦ AI 정리')}<div class="modal-b">
+    <div class="ai-sec">
+      <h3>1. 항목 다시 분류</h3>
+      <p class="hint">AI 가 항목을 읽고 분야·하위분야·태그를 제안합니다. 바꿀 것만 표로 보여 주고, 체크한 항목만 적용됩니다. 30개씩 나눠 처리하며 한 묶음에 10~30초쯤 걸립니다.</p>
+      <div class="ai-opts">
+        <label><input type="radio" name="scope" value="empty" ${empty.length?'checked':''}> 분야가 비어 있는 항목 <b>${empty.length}</b></label>
+        <label><input type="radio" name="scope" value="list" ${empty.length?'':'checked'}> 지금 보이는 목록 <b>${vis.length}</b></label>
+        <label><input type="radio" name="scope" value="all"> 전체 <b>${S.items.filter(i=>!i.example).length}</b></label>
+      </div>
+      <div class="ai-row"><button type="button" class="btn small" id="orgBtn">✦ 제안 받기</button><span class="hint" id="orgMsg"></span></div>
+      <div id="orgOut"></div>
+    </div>
+    <div class="ai-sec">
+      <h3>2. 분야 구조 개편안</h3>
+      <p class="hint">전체 자료를 보고 하위분야를 더하거나 빼는 안을 냅니다. 아래 칸에서 고친 뒤 저장하면 "분야 편집"과 같은 방식으로 반영됩니다.</p>
+      <div class="ai-row"><button type="button" class="btn small" id="taxBtn">✦ 제안 받기</button><span class="hint" id="taxMsg"></span></div>
+      <div id="taxOut"></div>
+    </div>
+  </div><div class="modal-f"><button type="button" class="btn" data-close>닫기</button></div>`,'wide');
+  const veil=$('#veil'); let props=[];
+  $('#orgBtn').addEventListener('click',async()=>{
+    const scope=veil.querySelector('input[name=scope]:checked').value;
+    const ids=(scope==='empty'?empty:scope==='list'?vis:S.items.filter(i=>!i.example)).map(i=>i.id);
+    const msg=$('#orgMsg'), out=$('#orgOut'), btn=$('#orgBtn');
+    if(!ids.length){ msg.textContent='대상 항목이 없습니다.'; return; }
+    btn.disabled=true; out.innerHTML=''; props=[]; let same=0, done=0;
+    const alive=()=>document.body.contains(veil);   // 창을 닫으면 더 부르지 않는다
+    try{
+      for(let i=0;i<ids.length;i+=30){
+        if(!alive()) return;
+        msg.textContent=`AI 가 검토하는 중… ${done}/${ids.length}`;
+        const r=await store.ai('organize',{ids:ids.slice(i,i+30)});
+        (r.proposals||[]).forEach(p=>{ if(p.changed) props.push(p); else same++; });
+        done=Math.min(ids.length,i+30);
+      }
+      if(!alive()) return;
+      msg.textContent=`검토 완료: ${ids.length}개 중 ${props.length}개 변경 제안, ${same}개는 지금 분류가 적절합니다.`;
+    }catch(x){ if(!alive()) return; msg.textContent='실패: '+(x.message||x.code||'오류')+(props.length?` (그 전까지 받은 ${props.length}개 제안은 아래에 있습니다)`:''); }
+    renderProps(); btn.disabled=false;
+  });
+  function renderProps(){
+    const out=$('#orgOut'); if(!props.length){ out.innerHTML=''; return; }
+    out.innerHTML=`<div class="ai-wrap"><table class="ai-tbl"><tr><th><input type="checkbox" id="orgAll" checked></th><th>항목</th><th>지금</th><th>제안</th><th>이유</th></tr>${props.map((p,i)=>{ const c=byId(p.id);
+      return `<tr><td><input type="checkbox" data-pi="${i}" checked></td><td>${esc(c.title||p.id)}</td><td class="ai-old">${esc(c.category||'(없음)')}${c.sub?' › '+esc(c.sub):''}<br>${(c.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="ai-new">${esc(p.category)}${p.sub?' › '+esc(p.sub):''}${p.newSub?' <span class="ai-tag">새 하위분야</span>':''}<br>${(p.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="hint">${esc(p.reason||'')}</td></tr>` }).join('')}</table></div>
+      <div class="ai-row"><button type="button" class="btn primary small" id="orgApply">체크한 항목 적용</button><span class="hint" id="orgApplyMsg"></span></div>`;
+    $('#orgAll').addEventListener('change',e=>out.querySelectorAll('[data-pi]').forEach(c=>c.checked=e.target.checked));
+    $('#orgApply').addEventListener('click',async()=>{
+      const sel=[...out.querySelectorAll('[data-pi]:checked')].map(c=>props[+c.dataset.pi]); const m=$('#orgApplyMsg');
+      if(!sel.length){ m.textContent='선택한 항목이 없습니다.'; return; }
+      $('#orgApply').disabled=true; let ok=0,fail=0;
+      for(const p of sel){ try{ await store.patch(p.id,{category:p.category,sub:p.sub||'',tags:p.tags||[],updatedAt:new Date().toISOString()}); ok++; }catch(x){ fail++; } m.textContent=`적용 중… ${ok+fail}/${sel.length}`; }
+      // 새 하위분야는 분야 목록에도 추가
+      const merged=S.cats.map(c=>({...c,subs:c.subs.slice()})); let added=0;
+      sel.forEach(p=>{ if(!p.sub) return; const c=merged.find(x=>x.name===p.category); if(c&&!c.subs.includes(p.sub)){ c.subs.push(p.sub); added++; } });
+      if(added){ try{ await store.saveCategories(merged); }catch(x){ added=0; } }
+      m.textContent=`완료: ${ok}개 적용${fail?`, ${fail}개 실패`:''}${added?`, 하위분야 ${added}개 추가`:''}`;
+      toast(`${ok}개 항목을 다시 분류했습니다`);
+      props=props.filter(p=>!sel.includes(p)); if(!props.length){ $('#orgMsg').textContent=m.textContent; out.innerHTML=''; }
+      else renderProps();
+    });
+  }
+  $('#taxBtn').addEventListener('click',async()=>{
+    const msg=$('#taxMsg'), out=$('#taxOut'), btn=$('#taxBtn');
+    btn.disabled=true; msg.textContent='AI 가 전체 자료를 살펴보는 중… (30초쯤 걸립니다)'; out.innerHTML='';
+    try{
+      const r=await store.ai('taxonomy',{}); const list=normCats(r.list);
+      if(!list.length) throw new Error('제안을 받지 못했습니다');
+      msg.textContent=`자료 ${r.itemCount||S.items.length}개를 보고 만든 안입니다. 고친 뒤 저장하세요.`;
+      out.innerHTML=`${(r.notes||[]).length?`<ul class="ai-notes">${r.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`:''}
+        <div class="two"><label class="fld">지금<textarea class="code" readonly style="min-height:150px">${esc(catsToText(S.cats))}</textarea></label>
+        <label class="fld">제안 (수정 가능)<textarea class="code" id="taxText" style="min-height:150px">${esc(catsToText(list))}</textarea></label></div>
+        <div class="ai-row"><button type="button" class="btn primary small" id="taxSave">이 구조로 저장</button><span class="hint">분야 이름을 바꿔도 기존 항목의 분야 표기는 그대로입니다. 항목까지 옮기려면 위의 "항목 다시 분류"를 쓰세요.</span></div>`;
+      $('#taxSave').addEventListener('click',async()=>{
+        const l=parseCatText($('#taxText').value); if(!l.length){ msg.textContent='분야가 하나는 있어야 합니다.'; return; }
+        try{ await store.saveCategories(l); toast('분야 구조를 저장했습니다'); msg.textContent='저장했습니다. 왼쪽 분야 목록에 반영됩니다.'; }catch(x){ msg.textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+      });
+    }catch(x){ msg.textContent='실패: '+(x.message||x.code||'오류'); }
+    btn.disabled=false;
   });
 }
 
 function openMore(){
   modal(`${mh('더 보기')}<div class="modal-b"><div class="menu">
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
+    ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 제안</small></button>`:''}
     ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
     <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개</div>
   </div>`,'narrow');
   $('#veil').addEventListener('click',async e=>{ const b=e.target.closest('[data-m]'); if(!b) return; const m=b.dataset.m;
-    if(m==='io') openIO(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
+    if(m==='io') openIO(); else if(m==='ai') openAiOrganize(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
 }
 
 function openIO(){
@@ -906,7 +1083,7 @@ function openIO(){
         <button class="btn" id="exportBtn">⇩ JSON 내보내기</button>
         <label class="btn" style="justify-content:center">⇧ JSON 가져오기<input type="file" accept="application/json,.json" id="importFile" hidden></label>
       </div>
-      <div class="hint">가져온 항목은 내 글로 등록됩니다. 가져오기는 로그인이 필요합니다.</div>
+      <div class="hint">새 항목은 내 글로 등록되고, 이미 있는 항목은 올린 사람이 그대로 유지됩니다. 가져오기는 로그인이 필요합니다.</div>
       <div class="hint" id="ioMsg"></div>
   </div>`);
   $('#exportBtn').addEventListener('click',()=>{
@@ -921,12 +1098,19 @@ function openIO(){
       if(!arr.length) throw new Error('항목이 없습니다');
       let ok=0,fail=0;
       for(const raw of arr){
-        const it={id:String(raw.id||uid()),type:TYPES[raw.type]?raw.type:'link',title:String(raw.title||raw.url||'(제목 없음)'),url:String(raw.url||''),lang:String(raw.lang||''),body:String(raw.body||''),category:String(raw.category||''),sub:String(raw.sub||''),tags:Array.isArray(raw.tags)?raw.tags.map(String):[],by:String(raw.by||ME.name),ownerId:ME.id,createdAt:raw.createdAt||new Date().toISOString()};
-        const ex=S.items.find(x=>x.id===it.id); if(ex&&!canEdit(ex)){ fail++; continue; }
+        const rid=okId(raw.id)?String(raw.id):uid();                 // 이상한 id 는 새로 만든다 (화면 속성에 그대로 들어가므로)
+        const ex=S.items.find(x=>x.id===rid);
+        const it={id:rid,type:TYPES[raw.type]?raw.type:'link',title:String(raw.title||raw.url||'(제목 없음)'),url:String(raw.url||''),lang:String(raw.lang||''),body:String(raw.body||''),category:String(raw.category||''),sub:String(raw.sub||''),tags:Array.isArray(raw.tags)?raw.tags.map(String):[],
+          // 이미 있는 항목은 올린 사람·소유자·수정시각을 그대로 둔다 (백업 복원 시 소유권이 넘어가지 않게)
+          by:ex?ex.by:String(raw.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(raw.createdAt||new Date().toISOString()),updatedAt:ex?ex.updatedAt:(raw.updatedAt||null)};
+        if(ex&&!canEdit(ex)){ fail++; continue; }
         try{ await store.put(it); ok++; }catch(x){ fail++; }
         msg.textContent=`가져오는 중… ${ok+fail}/${arr.length}`;
       }
-      if(Array.isArray(j.collections)) for(const c of j.collections){ if(c&&c.id&&c.title){ const ex=S.cols.find(x=>x.id===c.id); if(!ex||canEdit(ex)) await store.putCol({id:c.id,title:c.title,desc:c.desc||'',itemIds:Array.isArray(c.itemIds)?c.itemIds:[],ownerId:ME.id,by:c.by||ME.name,createdAt:c.createdAt||new Date().toISOString()}); } }
+      if(Array.isArray(j.collections)) for(const c of j.collections){ if(!(c&&okId(c.id)&&c.title)) continue;
+        const ex=S.cols.find(x=>x.id===c.id); if(ex&&!canEdit(ex)) continue;
+        await store.putCol({id:String(c.id),title:String(c.title),desc:String(c.desc||''),itemIds:(Array.isArray(c.itemIds)?c.itemIds:[]).filter(okId),
+          by:ex?ex.by:String(c.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(c.createdAt||new Date().toISOString())}); }
       if(S.admin&&Array.isArray(j.categories)&&j.categories.length){ const merged=S.cats.slice(); normCats(j.categories).forEach(c=>{ const ex=merged.find(x=>x.name===c.name); if(ex) ex.subs=[...new Set([...ex.subs,...c.subs])]; else merged.push(c); }); await store.saveCategories(merged); }
       msg.textContent=`완료: ${ok}개 추가·갱신${fail?`, ${fail}개 건너뜀(권한 없음 또는 실패)`:''}`; toast(`${ok}개를 가져왔습니다`);
     }catch(x){ msg.textContent='읽을 수 없는 파일입니다: '+(x.message||x); }

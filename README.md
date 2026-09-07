@@ -15,6 +15,8 @@
 | `supabase/seed-2.json` | 위와 같은 20개. 사이트의 ⋯ → 파일로 관리 → JSON 가져오기 용 |
 | `supabase/seed-3.sql` | **AI 에이전트** 분야 추가 + 자료 11개. SQL Editor 용 |
 | `supabase/seed-3.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
+| `supabase/functions/ai/index.ts` | **서비스 안 AI 에이전트** (Supabase Edge Function). 올릴 때 분류 제안, 운영자용 재분류·분야 구조 제안. Claude API 키는 여기서만 쓰임 |
+| `supabase/config.toml` | Supabase CLI 설정 (Edge Function 배포용) |
 | `.claude/agents/add-category.md` | Claude Code 서브에이전트. "○○ 분야 추가해줘" 하면 seed 파일과 기본 분야를 만들어 줌 |
 
 `config.js`가 비어 있으면 **미리보기 모드**로 동작합니다. 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다. `index.html`을 더블클릭해 열어 보세요.
@@ -120,6 +122,32 @@ update public.profiles set is_admin = true
 > `운영자 권한은 직접 바꿀 수 없습니다` 오류가 나면 예전 `schema.sql` 이 적용된 상태입니다.
 > 최신 `schema.sql` 을 SQL Editor 에서 다시 한 번 실행한 뒤 위 쿼리를 재실행하세요.
 
+### 7. AI 기능 켜기 (선택, 약 10분)
+
+사이트 안에 **분류 담당 AI 에이전트**가 들어 있습니다. 세 가지 일을 합니다.
+
+| 어디서 | 누가 | 무엇을 |
+|---|---|---|
+| 새 항목 창 → **✦ AI 분류 제안** | 로그인한 사람 | 제목·주소를 보고 분야·하위분야·태그를 채움. 제목이 비었으면 제목도, 링크 설명이 비었으면 한 줄 설명도 제안 |
+| 분야 옆 **✦ AI 정리** → 항목 다시 분류 | 운영자 | 분야가 빈 항목·보이는 목록·전체를 30개씩 검토해 바꿀 것만 표로 제안. 체크한 것만 적용 |
+| **✦ AI 정리** → 분야 구조 개편안 | 운영자 | 전체 자료를 보고 하위분야를 더하고 빼는 안을 제안. 고쳐서 저장 |
+
+브라우저는 AI 키를 가질 수 없으므로, 호출은 Supabase **Edge Function** (`supabase/functions/ai`) 이 대신합니다. 이 함수는 데이터를 읽기만 하고, 실제 변경은 브라우저가 로그인한 사람의 권한(RLS)으로 합니다.
+
+1. https://console.anthropic.com 에서 API 키를 만듭니다 (`sk-ant-...`). 결제 수단 등록이 필요합니다. 비용은 항목 하나 분류에 1원 안팎, 50개 재분류에 50원 안팎입니다.
+   비용 방어선으로 한 사람이 하루에 쓸 수 있는 횟수를 **40회**(운영자 600회)로 제한해 두었습니다. 바꾸려면 `supabase/functions/ai/index.ts` 의 `DAILY_LIMIT` 을 고치고 다시 배포하세요.
+   이 한도는 `schema.sql` 의 `ai_take_quota` 함수가 셉니다. **schema.sql 을 최신으로 한 번 더 실행해야** AI 기능이 동작합니다.
+2. 이 폴더에서 터미널을 열고 (Node 가 설치되어 있으면 됩니다):
+   ```bash
+   npx supabase login                                     # 브라우저가 열리고 Supabase 로그인
+   npx supabase link --project-ref csxndscngmkciibarumi   # 프로젝트 ref 는 Supabase URL 의 앞부분. DB 비밀번호는 Enter 로 건너뛰어도 됨
+   npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...  # 키는 Supabase 에만 저장됨 (저장소에 넣지 않음)
+   npx supabase functions deploy ai
+   ```
+3. `config.js` 의 `AI` 가 `true` 인지 확인 (기본값). 사이트를 새로고침하면 새 항목 창에 **✦ AI 분류 제안** 버튼이 보입니다. 끄려면 `AI: false`.
+
+함수 코드를 고친 뒤에는 `npx supabase functions deploy ai` 만 다시 실행하면 됩니다. 로그는 Supabase 대시보드 **Edge Functions → ai → Logs** 에서 봅니다.
+
 ## 권한 요약
 
 | 행동 | 비로그인 | 로그인 | 운영자 |
@@ -129,7 +157,8 @@ update public.profiles set is_admin = true
 | 추천 (항목당 1회) | | O | O |
 | 신고 | | O | O |
 | 수정·삭제 | | 내 것만 | 모두 |
-| 신고 검토함, 분야 편집 | | | O |
+| AI 분류 제안 (새 항목 창) | | O | O |
+| 신고 검토함, 분야 편집, AI 정리 | | | O |
 
 이 규칙은 화면이 아니라 데이터베이스(RLS)가 지키므로, 페이지를 고쳐도 우회할 수 없습니다.
 
@@ -147,3 +176,5 @@ Vercel 프로젝트 **Settings → Domains** 에서 도메인을 추가하고, �
 - **메일이 안 옴**: 스팸함 확인. 짧은 시간에 여러 번 보내면 Supabase 기본 메일 한도에 걸립니다.
 - **"실시간 연결 끊김"**: 새로고침하면 최신 내용을 다시 불러옵니다. 계속되면 `schema.sql` 의 실시간 설정 부분을 다시 실행하세요.
 - **올리기가 "저장하지 못했습니다"**: 로그인 후 이름을 정했는지, `schema.sql` 을 끝까지 실행했는지 확인.
+- **AI 버튼이 "아직 배포되지 않았습니다"**: 7단계의 `functions deploy ai` 를 아직 안 한 상태. **"ANTHROPIC_API_KEY 가 설정되지 않았습니다"** 는 `secrets set` 을 빠뜨린 것.
+- **AI 버튼이 안 보임**: `config.js` 의 `AI` 가 `false` 이거나 미리보기 모드. 운영자용 **✦ AI 정리** 는 운영자 지정(6단계) 후에 나타남.

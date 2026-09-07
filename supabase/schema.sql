@@ -64,6 +64,7 @@ create table if not exists public.items (
 );
 create index if not exists items_created_idx on public.items (created_at desc);
 create index if not exists items_owner_idx on public.items (owner_id);
+create index if not exists items_category_idx on public.items (category, sub);
 
 -- ---------- 모음 ----------
 create table if not exists public.collections (
@@ -95,6 +96,7 @@ create table if not exists public.votes (
   created_at timestamptz not null default now(),
   primary key (item_id, user_id)
 );
+create index if not exists votes_user_idx on public.votes (user_id);   -- RLS 의 user_id = auth.uid() 필터용
 
 -- 추천 수를 items.votes 에 유지
 create or replace function public.sync_vote_count()
@@ -185,6 +187,56 @@ drop policy if exists settings_select on public.settings;
 create policy settings_select on public.settings for select using (true);
 drop policy if exists settings_write on public.settings;
 create policy settings_write on public.settings for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- ---------- AI 사용량 (Edge Function 이 하루 호출 횟수를 센다) ----------
+create table if not exists public.ai_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  day date not null default current_date,
+  n integer not null default 0,
+  primary key (user_id, day)
+);
+alter table public.ai_usage enable row level security;   -- 정책 없음 = 아무도 직접 못 본다 (아래 함수로만 접근)
+
+-- 오늘 사용량을 1 늘리고, 한도 안이면 true. Edge Function 이 AI 호출 전에 부른다.
+create or replace function public.ai_take_quota(lim integer)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare cur integer;
+begin
+  if auth.uid() is null then return false; end if;
+  insert into public.ai_usage (user_id, day, n) values (auth.uid(), current_date, 1)
+    on conflict (user_id, day) do update set n = public.ai_usage.n + 1
+    returning n into cur;
+  return cur <= lim;
+end $$;
+revoke all on function public.ai_take_quota(integer) from public;
+grant execute on function public.ai_take_quota(integer) to authenticated;
+
+-- ---------- id 형식 제약 (id 가 화면 HTML 속성에 들어가므로 서버에서 막는다) ----------
+-- 이미 운영 중인 DB 라면 먼저 아래로 어긋나는 행이 없는지 확인하세요. 있으면 그 행을 고친 뒤 실행합니다.
+--   select id from public.items where id !~ '^[A-Za-z0-9_-]{1,64}$';
+alter table public.items       drop constraint if exists items_id_fmt;
+alter table public.items       add  constraint items_id_fmt       check (id ~ '^[A-Za-z0-9_-]{1,64}$');
+alter table public.collections drop constraint if exists collections_id_fmt;
+alter table public.collections add  constraint collections_id_fmt check (id ~ '^[A-Za-z0-9_-]{1,64}$');
+alter table public.reports     drop constraint if exists reports_id_fmt;
+alter table public.reports     add  constraint reports_id_fmt     check (id ~ '^[A-Za-z0-9_-]{1,64}$');
+alter table public.reports     drop constraint if exists reports_item_id_fmt;
+alter table public.reports     add  constraint reports_item_id_fmt check (item_id ~ '^[A-Za-z0-9_-]{1,64}$');
+
+-- 길이 제한: 한 사람이 DB·전송량을 부풀리지 못하게 (모든 방문자가 items 전체를 받아 간다)
+alter table public.items drop constraint if exists items_len;
+alter table public.items add  constraint items_len check (
+  length(title) <= 300 and length(url) <= 2000 and length(lang) <= 40 and length(body) <= 20000
+  and length(category) <= 60 and length(sub) <= 60 and length(by) <= 40
+  and (array_length(tags, 1) is null or array_length(tags, 1) <= 20)
+);
+
+-- 추천 수(votes)는 votes 표의 트리거가 관리하는 파생 값이다. 사용자가 REST 로 직접 고치지 못하게
+-- 표 단위 update 권한을 걷고 votes 를 뺀 나머지 컬럼만 다시 준다.
+-- (컬럼만 revoke 하면 표 단위 권한이 남아 효과가 없다. 동기화 트리거는 security definer 라 영향받지 않는다.)
+revoke update on public.items from authenticated, anon;
+grant  update (type, title, url, lang, body, category, sub, tags, by, owner_id, updated_at)
+  on public.items to authenticated;
 
 -- ---------- 실시간 반영 ----------
 do $$

@@ -1,6 +1,17 @@
 # 할 일
 
 ## 바로 할 것
+- [ ] **AI 기능 배포** (README 7단계). 터미널에서 순서대로:
+  ```bash
+  npx supabase login                                    # 브라우저가 열림
+  npx supabase link --project-ref csxndscngmkciibarumi  # DB 비밀번호는 Enter 로 건너뛰어도 됨
+  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...  # console.anthropic.com 에서 발급
+  npx supabase functions deploy ai
+  ```
+  배포 후 사이트에서 새 항목 창의 **✦ AI 분류 제안**, 운영자로 **✦ AI 정리** 동작 확인
+- [ ] **`schema.sql` 다시 실행** (감사 후 추가된 부분: AI 사용량 한도 `ai_take_quota`, id 형식·길이 제약, `votes` 컬럼 권한, 인덱스 2개).
+  실행 전 어긋나는 id 가 없는지 확인: `select id from public.items where id !~ '^[A-Za-z0-9_-]{1,64}$';`
+  이걸 안 하면 AI 함수가 "사용량을 확인하지 못했습니다" 로 실패합니다
 - [ ] **운영자 지정**: Supabase SQL Editor 에서 실행 (README 6단계). 실행 후 사이트에 "운영자" 표시·"검토함" 버튼 확인
   ```sql
   update public.profiles set is_admin = true
@@ -27,6 +38,18 @@
 - [ ] 도메인 연결 (Vercel Settings → Domains). 연결 후 Supabase `Site URL`, 카카오 플랫폼 도메인도 갱신
 - [ ] Supabase 무료 티어 한도(용량·요청) 모니터링, 백업은 `⋯ → 파일로 관리 → JSON 내보내기` 로 주기적으로
 - [ ] `gh auth setup-git` 실행해 두기 (푸시 시 자격 증명 창 멈춤 방지)
+
+## 감사에서 남긴 것 (2026-09-07)
+- [ ] **성능**: items 가 바뀔 때마다 모든 접속자가 전체 테이블을 다시 받고, 화면도 전부 다시 그린다. 자료가 수백 개를 넘으면 개선 필요 (변경 행만 반영 + 부분 렌더)
+- [ ] **1000행 상한**: `.limit(5000)` 은 Supabase API 기본 Max rows(1000)에 조용히 잘린다. 자료가 1000개에 가까워지면 페이지 나눠 읽기 또는 설정 상향
+- [ ] **링크 공유**: 항목·모음·검색 결과를 주소로 공유할 수 없다 (URL 라우팅 없음). 공유 자료함에는 큰 공백
+- [ ] **접근성**: 모달 포커스 가둠·복귀, 토스트 `aria-live`, 힌트 글자 명도 대비, 터치 영역 24px, 검색창 레이블
+- [ ] **이름 바꾸기가 과거 글에 반영 안 됨**: `by` 가 항목마다 복제된 스냅샷이라 그렇다. 표시할 때 프로필에서 읽어오는 방식으로 바꿀지 검토
+- [ ] **모음 고아 id**: 항목을 지워도 남의 모음에 든 id 는 남는다. 화면에서 걸러 보여 주거나 정리 작업 필요
+- [ ] **신고 중복·고아**: `reports.item_id` 에 외래키가 없고, 같은 사람이 같은 항목을 여러 번 신고할 수 있다
+- [ ] **AI 재분류 표가 모바일에서 읽기 어려움**: 5열을 카드 형태로 바꾸기
+- [ ] **프롬프트 인젝션**: AI 정리에 다른 사람이 쓴 내용이 그대로 들어가고 제안 표는 기본 전체 체크. 기본 해제로 바꿀지 검토
+- [ ] **카카오 키 파일**(`supabase/톡연계정보.txt`)을 저장소 폴더 밖으로 옮기기. 지금은 `.gitignore` 한 줄이 유일한 방어
 
 ## 나중에
 - [x] 분야·하위분야 확장 → AI 에이전트 추가 (`seed-3`). 다음 분야는 `add-category` 에이전트로
