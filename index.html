@@ -226,7 +226,8 @@ a{color:var(--link)}
 .sec summary .acts{display:flex;gap:2px}
 .sec summary .acts button{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 5px;letter-spacing:0;text-transform:none;border-radius:5px;min-height:24px}
 .sec summary .acts button:hover{color:var(--text);background:var(--surface)}
-.owner{font-size:10.5px;color:var(--faint);letter-spacing:0;text-transform:none;padding:0 8px 4px 24px}
+.owner{font-size:10.5px;color:var(--faint);letter-spacing:0;text-transform:none;padding:2px 8px 4px 24px}
+@media(max-width:820px){.owner{width:100%;padding:0 2px 2px}}
 .owner b{color:var(--muted);font-weight:500}
 .tagbox summary .num{font-family:var(--mono);color:var(--faint);letter-spacing:0}
 .tagbox summary .cur{color:var(--accent);letter-spacing:0;text-transform:none;font-family:var(--mono)}
@@ -497,7 +498,6 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
     <details class="sec" id="catBox">
       <summary><span class="ttl">분야</span><span class="cur" id="catCur"></span><span class="acts"><button type="button" id="catEdit" hidden title="분야·하위분야 편집">편집</button><button type="button" id="catAi" hidden title="AI 로 항목 재분류·분야 구조 제안">✦ AI</button></span></summary>
       <div class="rail-list" id="catList"></div>
-      <div class="owner" id="catOwnerLine" hidden></div>
     </details>
     <details class="sec" id="colBox">
       <summary><span class="ttl">모음</span><span class="num" id="colNum"></span><span class="acts"><button type="button" id="colNew" title="새 모음 만들기">＋ 새 모음</button></span></summary>
@@ -902,8 +902,11 @@ function renderRail(){
     const on=S.cat===c.name, open=S.openCats.includes(c.name);   // 필터 여부와 펼침 여부는 별개다
     h+=`<button class="f${on&&!S.sub?' on':''}" data-cat="${esc(c.name)}"><span class="lbl">${open?'▾':'▸'}&nbsp;${esc(c.name)}</span><span class="cnt">${cc[c.name]||0}</span></button>`;
     if(open){
+      // 담당자는 펼친 분야 바로 아래에 붙인다. 목록 맨 아래에 한 줄만 두면 어느 분야 것인지 알 수 없다.
+      const mine=c.owner===ME.id, who=c.owner?(mine?(ME.name||c.ownerName||'이름 없음'):(c.ownerName||'이름 없음')):'';
+      h+=`<div class="owner">담당 <b>${c.owner?esc(who):'운영자'}</b>${mine?' (나)':''}</div>`;
       const subs=c.subs.slice(); Object.keys(sc).forEach(k=>{ const [cn,sn]=k.split('/'); if(cn===c.name&&!subs.includes(sn)) subs.push(sn) });
-      subs.forEach(s=>{ h+=`<button class="f sub${S.sub===s?' on':''}" data-sub="${esc(s)}"><span class="lbl">${esc(s)}</span><span class="cnt">${sc[c.name+'/'+s]||0}</span></button>` });
+      subs.forEach(s=>{ h+=`<button class="f sub${S.cat===c.name&&S.sub===s?' on':''}" data-sub="${esc(s)}" data-parent="${esc(c.name)}"><span class="lbl">${esc(s)}</span><span class="cnt">${sc[c.name+'/'+s]||0}</span></button>` });
       if(!subs.length) h+=`<span class="hint" style="padding:2px 24px">하위분야 없음</span>`;
     }
   });
@@ -912,10 +915,6 @@ function renderRail(){
   // 접힌 상태에서도 지금 무엇으로 걸러 보고 있는지 제목줄에 보인다
   $('#typeCur').textContent=S.type==='all'?'':(TYPES[S.type]||{}).n||'';
   $('#catCur').textContent=S.cat==='all'?'':S.cat+(S.sub?' › '+S.sub:'');
-  // 선택한 분야의 주 관리자
-  const oc=S.cat!=='all'?catOwner(S.cat):null, ol=$('#catOwnerLine');
-  if(oc){ ol.hidden=false; ol.innerHTML=oc.owner?`담당 <b>${esc(oc.owner===ME.id?(ME.name||oc.ownerName||'이름 없음'):(oc.ownerName||'이름 없음'))}</b>${oc.owner===ME.id?' (나)':''}`:'담당 <b>운영자</b>'; }
-  else ol.hidden=true;
   const cols=S.cols.slice().sort((a,b)=>(b.itemIds||[]).length-(a.itemIds||[]).length);
   $('#colNum').textContent=cols.length?cols.length:'';
   $('#colList').innerHTML=cols.length?cols.map(c=>`<button class="f${S.col===c.id?' on':''}" data-col="${esc(c.id)}"><span class="lbl">▤&nbsp;${esc(c.title)}</span><span class="cnt">${(c.itemIds||[]).length}</span></button>`).join(''):'<span class="hint">모음은 주제별로 항목을 묶는 큐레이션입니다. 첫 모음을 만들어 보세요.</span>';
@@ -965,7 +964,12 @@ document.querySelector('.rail').addEventListener('click',e=>{
       LS.set('toolbox.openCats',S.openCats);
     }
   }
-  if(s) S.sub=S.sub===s.dataset.sub?null:s.dataset.sub;
+  if(s){
+    const par=s.dataset.parent||S.cat;
+    // 이미 그 분야의 같은 하위분야가 켜져 있으면 끄고, 아니면 그 분야까지 함께 켠다
+    if(S.cat===par&&S.sub===s.dataset.sub) S.sub=null;
+    else{ S.cat=par; S.sub=s.dataset.sub; if(!S.openCats.includes(par)){ S.openCats=[...S.openCats,par]; LS.set('toolbox.openCats',S.openCats); } }
+  }
   if(g) S.tag=S.tag===g.dataset.tag?null:g.dataset.tag;
   if(m) S.mine=!S.mine;
   if(k) S.col=S.col===k.dataset.col?null:k.dataset.col;
