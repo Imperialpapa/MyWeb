@@ -7,6 +7,7 @@
 - `supabase/seed-3.sql`: settings.categories 에 분야를 합치는 SQL(중복 실행 안전) + 자료 11개
 - `supabase/seed-3.json`: 같은 내용. 운영자로 JSON 가져오기 하면 분야도 같이 들어감
 - `schema.sql` 기본 분야, `index.html` 미리보기 기본 분야(DEFAULT_CATS)에 반영
+- Supabase 에 `seed-3.sql` 실행 완료. settings 에 분야 3개(개발·도구, 생활·건강·취미, AI 에이전트), 자료 총 49개 확인
 
 ### 에이전트
 - `.claude/agents/add-category.md`: 분야 추가 전담 Claude Code 서브에이전트. seed SQL/JSON 생성, 기본 분야·README 갱신, JSON 검증까지 수행
