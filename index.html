@@ -892,16 +892,16 @@ function openNameForm(cb){
     <div class="hint">올린 자료마다 이 이름이 붙고, <b>로그인하지 않은 사람에게도 보입니다.</b> 본명 대신 닉네임을 권합니다.</div>
     ${sug?`<div class="hint">카카오 닉네임을 미리 넣어 두었습니다. 그대로 쓰거나 지우고 새로 적으세요.</div>`:''}
     ${!first?`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" name="past" checked> 예전에 올린 자료의 이름도 함께 바꾸기</label>`:''}
-  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary">저장</button></div></form>`,'narrow');
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">저장</button></div></form>`,'narrow');
   const f=$('#nf'); f.n.focus(); f.n.select();
   f.addEventListener('submit',async e=>{
     e.preventDefault(); const n=f.n.value.trim(); if(!n) return;
-    const btn=f.querySelector('[type=submit]'); btn.disabled=true;
+    const btn=f.querySelector('[type=submit]')||f.querySelector('.btn.primary'); if(btn) btn.disabled=true;
     try{
       await store.setName(n);
       if(f.past&&f.past.checked){ const c=await store.renamePast(n); if(c) toast(`예전 자료 ${c}개의 이름도 바꿨습니다`); }
       closeModal(); render(); cb&&cb(true);
-    }catch(x){ btn.disabled=false; $('#err').textContent='저장하지 못했습니다 ('+(x.code||'오류')+')'; }
+    }catch(x){ if(btn) btn.disabled=false; $('#err').textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
   });
   if(cb) $('#veil').addEventListener('click',e=>{ if(e.target.closest('[data-close]')||e.target.id==='veil') cb(false); });
 }
@@ -993,7 +993,7 @@ async function openColForm(c){
     <label class="fld">모음 이름<input name="t" required maxlength="40" placeholder="예: 백엔드 입문 키트" value="${esc(d.title)}"></label>
     <label class="fld">설명 (선택)<textarea name="d" style="min-height:70px" placeholder="누구를 위한 모음인지, 어떤 순서로 보면 좋은지">${esc(d.desc||'')}</textarea></label>
     <div class="hint">모음은 항목을 주제별로 묶는 큐레이션입니다. 한 항목이 여러 모음에 들어갈 수 있고, 항목을 펼친 뒤 '모음에 담기'로 넣습니다.</div>
-  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary">${edit?'저장':'만들기'}</button></div></form>`,'narrow');
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">${edit?'저장':'만들기'}</button></div></form>`,'narrow');
   const f=$('#cf'); f.t.focus();
   f.addEventListener('submit',async e=>{
     e.preventDefault();
@@ -1032,7 +1032,7 @@ async function openReportForm(it){
     <label class="fld">이유<select name="r">${Object.entries(REASONS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label>
     <label class="fld">설명 (선택)<textarea name="n" style="min-height:70px" maxlength="300" placeholder="운영자가 판단할 수 있게 짧게"></textarea></label>
     <div class="hint">신고는 바로 항목을 숨기지 않습니다. 운영자가 검토한 뒤 처리합니다.</div>
-  </div><div class="modal-f"><button type="button" class="btn" data-close>취소</button><button class="btn primary">신고 보내기</button></div></form>`,'narrow');
+  </div><div class="modal-f"><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">신고 보내기</button></div></form>`,'narrow');
   $('#rf').addEventListener('submit',async e=>{
     e.preventDefault(); const f=e.target;
     const r={id:uid('r'),itemId:it.id,reason:f.r.value,note:f.n.value.trim(),by:ME.name||'',reporterId:ME.id,createdAt:new Date().toISOString()};
@@ -1045,7 +1045,7 @@ function openCatEditor(){
   modal(`${mh('분야 편집')}<form id="ce"><div class="modal-b">
     <label class="fld">한 줄에 분야 하나. 콜론 뒤에 하위분야를 쉼표로<textarea name="t" class="code" style="min-height:180px">${esc(catsToText(S.cats))}</textarea></label>
     <div class="hint">이름을 바꾸면 기존 항목의 분야 이름은 그대로 남습니다. 항목의 분야를 함께 바꾸려면 각 항목을 수정해 주세요.</div>
-  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary">저장</button></div></form>`);
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">저장</button></div></form>`);
   $('#ce').addEventListener('submit',async e=>{
     e.preventDefault();
     const list=parseCatText(e.target.t.value);
