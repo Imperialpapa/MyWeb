@@ -6,38 +6,149 @@
 <title>빠른 연결</title>
 <meta name="description" content="링크, 메모, 코드, 자료를 누구나 올리고 검색으로 바로 찾는 공유 자료함">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e2a94f'/%3E%3Cpath d='M9 9h14v14H9z' fill='none' stroke='%231a1408' stroke-width='3'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gothic+A1:wght@400;500;700&family=JetBrains+Mono:wght@400;500&family=Nanum+Gothic+Coding&display=swap">
+<script>
+/* 첫 페인트 전에 시간대 스킨과 밝기를 정한다. 늦으면 색이 한 번 번쩍인다.
+   저장값은 LS 헬퍼가 JSON 으로 넣으므로 따옴표를 벗기고 화이트리스트로 검증한다. */
+(function(){
+  try{
+    var g=function(k){ return (localStorage.getItem(k)||'').replace(/^"|"$/g,'') };
+    var v=g('toolbox.skin'), h=new Date().getHours();
+    var auto = h<6?'night' : h<14?'dawn' : h<22?'day' : 'night';
+    document.documentElement.dataset.skin = ['dawn','day','night'].indexOf(v)>=0 ? v : auto;
+    var t=g('toolbox.theme');
+    if(t==='light'||t==='dark') document.documentElement.dataset.theme=t;
+  }catch(e){
+    var h2=new Date().getHours();
+    document.documentElement.dataset.skin = h2<6?'night' : h2<14?'dawn' : h2<22?'day' : 'night';
+  }
+})();
+</script>
 <style>
+/* ==========================================================
+   팔레트 — 두 축이 곱해진다
+     축1 시간대(data-skin): 빛의 색상.  아침 / 낮·저녁 / 밤
+     축2 밝게·어둡게: 그 빛이 종이에 반사되는지 화면에서 발광하는지
+   시간대는 밝기를 모르고, 밝기는 시간대를 모른다.
+   data-skin 이 없어도(스크립트 실패) 아래 폴백 한 벌이 걸린다.
+   ========================================================== */
 :root{
-  --bg:#14161b; --bg2:#1a1d24; --surface:#1f232b; --surface2:#262b35; --line:#2d323d; --line2:#3a4050;
-  --text:#e7e9ef; --muted:#8e94a4; --faint:#5e6473;
-  --accent:#e2a94f; --accent-ink:#1a1408; --accent-soft:rgba(226,169,79,.14);
-  --good:#4fbf87; --bad:#e26d6d; --bad-soft:rgba(226,109,109,.14);
-  --link:#9fc2ff; --note:#d9b8ff; --code:#7fd8c9; --file:#f2a8c4;
-  --shadow:0 12px 40px rgba(0,0,0,.45);
-  --sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  --sans:"Gothic A1","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --mono:"JetBrains Mono","Nanum Gothic Coding",ui-monospace,Consolas,monospace;
+  --bg:#EAE4E0; --bg2:#E3DBD5; --surface:#EEF8FF; --surface2:#DEF2FF; --line:#DACFC8; --line2:#C7BAB2;
+  --text:#2A1E16; --muted:#554942; --faint:#675D56;
+  --accent:#196480; --accent-ink:#F8FDFF; --accent-soft:#BBE6FA;
+  --good:#43673F; --bad:#824B44; --bad-soft:#FDD5D0;
+  --link:#415D87; --note:#704E76; --code:#266A58; --file:#7B522D;
+  --shadow:0 6px 16px -6px #4F2F172E, 0 1px 2px -1px #4F2F1724;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+:root:not([data-skin]):not([data-theme="light"]){
+  --bg:#111D24; --bg2:#19252D; --surface:#1F2C34; --surface2:#2A3942; --line:#34434D; --line2:#475863;
+  --text:#E2EBF1; --muted:#B3BEC6; --faint:#98A3A9;
+  --accent:#61CCF9; --accent-ink:#00161F; --accent-soft:#0A3F52;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #000205A6, 0 1px 2px -1px #0002058C;
+  color-scheme:dark;
+} }
+:root[data-theme="dark"]:not([data-skin]){
+  --bg:#111D24; --bg2:#19252D; --surface:#1F2C34; --surface2:#2A3942; --line:#34434D; --line2:#475863;
+  --text:#E2EBF1; --muted:#B3BEC6; --faint:#98A3A9;
+  --accent:#61CCF9; --accent-ink:#00161F; --accent-soft:#0A3F52;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #000205A6, 0 1px 2px -1px #0002058C;
   color-scheme:dark;
 }
-@media (prefers-color-scheme: light){
-  :root:not([data-theme="dark"]){
-    --bg:#f3f4f7; --bg2:#ebedf2; --surface:#ffffff; --surface2:#f6f7fa; --line:#dfe2ea; --line2:#c9cdd8;
-    --text:#1b1e26; --muted:#5f6677; --faint:#9aa0ae;
-    --accent:#b8761c; --accent-ink:#ffffff; --accent-soft:rgba(184,118,28,.12);
-    --good:#1f9a5f; --bad:#c94a4a; --bad-soft:rgba(201,74,74,.10);
-    --link:#2a63c9; --note:#7a3fc2; --code:#177d6e; --file:#c23c74;
-    --shadow:0 12px 40px rgba(20,24,40,.18);
-    color-scheme:light;
-  }
-}
-:root[data-theme="light"]{
-  --bg:#f3f4f7; --bg2:#ebedf2; --surface:#ffffff; --surface2:#f6f7fa; --line:#dfe2ea; --line2:#c9cdd8;
-  --text:#1b1e26; --muted:#5f6677; --faint:#9aa0ae;
-  --accent:#b8761c; --accent-ink:#ffffff; --accent-soft:rgba(184,118,28,.12);
-  --good:#1f9a5f; --bad:#c94a4a; --bad-soft:rgba(201,74,74,.10);
-  --link:#2a63c9; --note:#7a3fc2; --code:#177d6e; --file:#c23c74;
-  --shadow:0 12px 40px rgba(20,24,40,.18);
+
+:root[data-skin="dawn"]{
+  --bg:#EAE4E0; --bg2:#E3DBD5; --surface:#EEF8FF; --surface2:#DEF2FF; --line:#DACFC8; --line2:#C7BAB2;
+  --text:#2A1E16; --muted:#554942; --faint:#675D56;
+  --accent:#196480; --accent-ink:#F8FDFF; --accent-soft:#BBE6FA;
+  --good:#43673F; --bad:#824B44; --bad-soft:#FDD5D0;
+  --link:#415D87; --note:#704E76; --code:#266A58; --file:#7B522D;
+  --shadow:0 6px 16px -6px #4F2F172E, 0 1px 2px -1px #4F2F1724;
   color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+:root[data-skin="dawn"]:not([data-theme="light"]){
+  --bg:#111D24; --bg2:#19252D; --surface:#1F2C34; --surface2:#2A3942; --line:#34434D; --line2:#475863;
+  --text:#E2EBF1; --muted:#B3BEC6; --faint:#98A3A9;
+  --accent:#61CCF9; --accent-ink:#00161F; --accent-soft:#0A3F52;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #000205A6, 0 1px 2px -1px #0002058C;
+  color-scheme:dark;
+} }
+:root[data-theme="dark"][data-skin="dawn"]{
+  --bg:#111D24; --bg2:#19252D; --surface:#1F2C34; --surface2:#2A3942; --line:#34434D; --line2:#475863;
+  --text:#E2EBF1; --muted:#B3BEC6; --faint:#98A3A9;
+  --accent:#61CCF9; --accent-ink:#00161F; --accent-soft:#0A3F52;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #000205A6, 0 1px 2px -1px #0002058C;
+  color-scheme:dark;
+}
+
+:root[data-skin="day"]{
+  --bg:#E1E5EE; --bg2:#D8DDE7; --surface:#FFF6E2; --surface2:#FDEDCD; --line:#CBD2E0; --line2:#B5BDCE;
+  --text:#1A2130; --muted:#454C5B; --faint:#595F6D;
+  --accent:#6434C2; --accent-ink:#FCFBFF; --accent-soft:#DED8FF;
+  --good:#43673F; --bad:#824B44; --bad-soft:#FDD5D0;
+  --link:#415D87; --note:#704E76; --code:#266A58; --file:#7B522D;
+  --shadow:0 6px 16px -6px #2937572E, 0 1px 2px -1px #29375724;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+:root[data-skin="day"]:not([data-theme="light"]){
+  --bg:#211A0B; --bg2:#2A2211; --surface:#312917; --surface2:#3F3522; --line:#4A402B; --line2:#5F543D;
+  --text:#EFE9DD; --muted:#C3BCAC; --faint:#A7A092;
+  --accent:#BFB2F9; --accent-ink:#140D29; --accent-soft:#3A3357;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #030100A6, 0 1px 2px -1px #0301008C;
+  color-scheme:dark;
+} }
+:root[data-theme="dark"][data-skin="day"]{
+  --bg:#211A0B; --bg2:#2A2211; --surface:#312917; --surface2:#3F3522; --line:#4A402B; --line2:#5F543D;
+  --text:#EFE9DD; --muted:#C3BCAC; --faint:#A7A092;
+  --accent:#BFB2F9; --accent-ink:#140D29; --accent-soft:#3A3357;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #030100A6, 0 1px 2px -1px #0301008C;
+  color-scheme:dark;
+}
+
+:root[data-skin="night"]{
+  --bg:#DAE8EC; --bg2:#CFE0E6; --surface:#FFF4F0; --surface2:#FFE9E2; --line:#BFD6DD; --line2:#A7C3CB;
+  --text:#04262E; --muted:#365058; --faint:#4D646A;
+  --accent:#9E1B66; --accent-ink:#FFFAFC; --accent-soft:#FBD1E2;
+  --good:#43673F; --bad:#824B44; --bad-soft:#FDD5D0;
+  --link:#415D87; --note:#704E76; --code:#266A58; --file:#7B522D;
+  --shadow:0 6px 16px -6px #023F4C2E, 0 1px 2px -1px #023F4C24;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+:root[data-skin="night"]:not([data-theme="light"]){
+  --bg:#2A140E; --bg2:#341C15; --surface:#3C221A; --surface2:#4B2E26; --line:#57382F; --line2:#6E4C41;
+  --text:#F8E5DF; --muted:#CFB6AF; --faint:#B19B95;
+  --accent:#F99DC6; --accent-ink:#240615; --accent-soft:#512B3D;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #060000A6, 0 1px 2px -1px #0600008C;
+  color-scheme:dark;
+} }
+:root[data-theme="dark"][data-skin="night"]{
+  --bg:#2A140E; --bg2:#341C15; --surface:#3C221A; --surface2:#4B2E26; --line:#57382F; --line2:#6E4C41;
+  --text:#F8E5DF; --muted:#CFB6AF; --faint:#B19B95;
+  --accent:#F99DC6; --accent-ink:#240615; --accent-soft:#512B3D;
+  --good:#A3CB9E; --bad:#EAACA3; --bad-soft:#4F2924;
+  --link:#A0C0EE; --note:#D5AEDB; --code:#8BCEB8; --file:#E1B38C;
+  --shadow:0 6px 18px -8px #060000A6, 0 1px 2px -1px #0600008C;
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
@@ -255,6 +366,105 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
 .toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){.toast{transition:none}}
 .foot{max-width:1180px;margin:0 auto;padding:0 20px 30px;color:var(--faint);font-size:12px;display:flex;gap:14px;flex-wrap:wrap}
+
+/* ==========================================================
+   판과 광원 — 검색창이 광원이고, 목록은 그 빛을 받는 판이다
+   ========================================================== */
+
+/* 광원이 옮겨 가는 순간 (8시간마다 한 번) */
+html{transition:background-color .9s ease}
+body,.top,.list,.row,.rv,.modal,.colhead,.notice,.me,.sort,.search input,.detail{
+  transition:background-color .9s ease,border-color .9s ease,color .9s ease}
+.row{transition:background-color .9s ease,box-shadow .12s ease,transform .12s ease}
+@media(prefers-reduced-motion:reduce){
+  html,body,.top,.list,.row,.rv,.modal,.colhead,.notice,.me,.sort,.search input,.detail{transition:none}}
+
+/* 서명 1 — 검색창이 이 페이지의 광원 */
+.search{isolation:isolate}
+.search .ico{display:none}
+.search::before{content:"\203A";position:absolute;left:14px;top:50%;
+  transform:translateY(-52%);font:500 20px/1 var(--mono);color:var(--accent);
+  pointer-events:none;z-index:1}
+.search input{height:44px;border-radius:12px;padding-left:34px;
+  background:var(--surface);border:1px solid var(--line);
+  box-shadow:var(--shadow), 0 0 26px -8px var(--accent-soft);
+  transition:box-shadow .12s ease,border-color .12s ease}
+.search:focus-within input{border-color:var(--accent);
+  box-shadow:var(--shadow),0 0 34px -6px var(--accent-soft),0 0 0 3px var(--accent-soft)}
+.search:focus-within .kbd{opacity:0;transition:opacity .12s ease}
+.search::after{content:"";position:absolute;inset:-16px -10px -20px;z-index:-1;
+  border-radius:22px;pointer-events:none;opacity:.6;
+  background:radial-gradient(58% 130% at 50% 10%, var(--accent-soft), transparent 72%)}
+/* 그 빛이 닿는 곳 = 검색어가 맞은 자리 */
+mark{background:transparent;color:inherit;border-radius:0;padding:0;
+  box-shadow:inset 0 -.42em 0 var(--accent-soft)}
+
+/* 서명 2 — 목록은 표가 아니라 판 위에 붙인 조각 */
+.list{background:transparent;border:0;border-radius:0;overflow:visible;
+  display:flex;flex-direction:column;gap:5px}
+.row{background:var(--surface);border-top:0;border-radius:3px 11px 11px 3px;
+  padding:12px 14px 12px 13px;
+  box-shadow:inset 4px 0 0 var(--tape,var(--line2)), var(--shadow)}
+.row:first-child{border-top:0}
+.row:hover{background:var(--surface2)}
+.row.sel{background:var(--surface2);transform:translateY(-1px);
+  box-shadow:inset 7px 0 0 var(--tape,var(--accent)),0 0 0 1px var(--accent),var(--shadow)}
+.row.flag{box-shadow:inset 7px 0 0 var(--bad),0 0 0 1px var(--bad),var(--shadow)}
+/* 붙임날 색 = 종류색. :has() 를 모르는 브라우저는 기본 회색으로 조용히 물러난다 */
+.row:has(>.kind.link){--tape:var(--link)}
+.row:has(>.kind.note){--tape:var(--note)}
+.row:has(>.kind.snippet){--tape:var(--code)}
+.row:has(>.kind.file){--tape:var(--file)}
+.list .empty{background:var(--surface);border-radius:14px;box-shadow:var(--shadow)}
+.detail{background:var(--bg);border-color:var(--line);border-radius:9px}
+
+/* 모양 — 딱딱함만 걷어내고 정보 밀도는 그대로 */
+.brand-mark{border-radius:9px;box-shadow:0 0 22px -6px var(--accent)}
+.brand-name{font-weight:700;letter-spacing:-.035em}
+.btn,.sort,.fld input,.fld textarea,.fld select,.types button{border-radius:10px}
+.rv,.colhead,.notice{border-radius:14px}
+.colhead,.rv{box-shadow:var(--shadow)}
+.modal{border-radius:16px;box-shadow:var(--shadow),0 24px 60px -20px rgba(0,0,0,.28)}
+.kind{border-radius:5px}
+.chip,.tag{border-radius:6px}
+.f.on{box-shadow:inset 2px 0 0 var(--accent)}
+
+/* 한글 조판 */
+html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
+.row-title,.colhead h2,.colhead p,.detail .body,.empty,.notice{word-break:keep-all}
+.detail pre,.detail .url,.vote,.kind{word-break:normal}
+.tagbox summary,.sec summary{text-transform:none;font-size:11px;
+  letter-spacing:.30em;font-weight:500}
+.colhead h2{font-size:17px;font-weight:700;letter-spacing:-.025em}
+.modal-h h2{font-weight:700;letter-spacing:-.02em}
+.row-title{font-weight:500;letter-spacing:-.012em;line-height:1.45}
+.row-sub{line-height:1.5}
+.tag{font-family:var(--sans);letter-spacing:0}   /* 한글 태그가 몰래 시스템 글꼴로 떨어지던 자리 */
+.mono,.num,.kbd span,.detail pre,.detail .url,.vote,.kind,.f .cnt{
+  font-variant-numeric:tabular-nums}
+
+/* 키캡 — 누르는 물건으로 보이게 */
+.kbd span,.foot .mono{border:1px solid var(--line2);border-bottom-width:2px;
+  border-radius:5px;padding:1px 6px;background:var(--bg2);color:var(--muted);
+  font-family:var(--mono);font-size:11px}
+.foot{gap:10px 18px}
+
+/* 기존 대비 결함 두 곳 */
+.badge{color:var(--bg)}
+.pill i{background:var(--muted)}
+
+/* 화면 고르기 패널 */
+.skinbtn{position:relative}
+.skinpop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:200px;
+  background:var(--surface);border:1px solid var(--line2);border-radius:12px;
+  box-shadow:var(--shadow),0 20px 50px -20px rgba(0,0,0,.3);padding:6px;
+  display:flex;flex-direction:column;gap:1px}
+.skinpop h5{margin:6px 8px 2px;font-size:10.5px;font-weight:500;letter-spacing:.16em;color:var(--faint)}
+.skinpop button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  border:0;background:transparent;color:var(--text);padding:7px 9px;border-radius:8px;font-size:13px}
+.skinpop button:hover{background:var(--surface2)}
+.skinpop button .mk{width:14px;color:var(--accent);flex:none}
+.skinpop button small{margin-left:auto;color:var(--faint);font-size:11px;font-family:var(--mono)}
 </style>
 </head>
 <body>
@@ -272,6 +482,7 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
     </div>
     <button class="btn ghost" id="reviewBtn" hidden title="신고 검토함">검토함 <span class="badge" id="reviewCnt">0</span></button>
     <button class="btn primary" id="addBtn">＋ 추가</button>
+    <span class="skinbtn"><button class="btn ghost" id="skinBtn" title="화면 고르기" aria-haspopup="true" aria-expanded="false">◐</button></span>
     <button class="btn ghost" id="moreBtn" title="더 보기">⋯</button>
   </div>
 </header>
@@ -529,7 +740,7 @@ const EXAMPLES=[
    ================================================================ */
 const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'자료'}};
 const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'부적절한 내용',dup:'중복'};
-const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false};
+const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCats:[]};
 const ME={id:null,name:'',email:''};
 let store=null;
 const $=s=>document.querySelector(s);
@@ -688,9 +899,9 @@ function renderRail(){
   const cats=S.cats.slice(); Object.keys(cc).forEach(n=>{ if(!cats.some(c=>c.name===n)) cats.push({name:n,subs:[]}) });
   let h=`<button class="f${S.cat==='all'?' on':''}" data-cat="all"><span class="lbl">전체</span><span class="cnt">${S.items.length}</span></button>`;
   cats.forEach(c=>{
-    const on=S.cat===c.name;
-    h+=`<button class="f${on&&!S.sub?' on':''}" data-cat="${esc(c.name)}"><span class="lbl">${on?'▾':'▸'}&nbsp;${esc(c.name)}</span><span class="cnt">${cc[c.name]||0}</span></button>`;
-    if(on){
+    const on=S.cat===c.name, open=S.openCats.includes(c.name);   // 필터 여부와 펼침 여부는 별개다
+    h+=`<button class="f${on&&!S.sub?' on':''}" data-cat="${esc(c.name)}"><span class="lbl">${open?'▾':'▸'}&nbsp;${esc(c.name)}</span><span class="cnt">${cc[c.name]||0}</span></button>`;
+    if(open){
       const subs=c.subs.slice(); Object.keys(sc).forEach(k=>{ const [cn,sn]=k.split('/'); if(cn===c.name&&!subs.includes(sn)) subs.push(sn) });
       subs.forEach(s=>{ h+=`<button class="f sub${S.sub===s?' on':''}" data-sub="${esc(s)}"><span class="lbl">${esc(s)}</span><span class="cnt">${sc[c.name+'/'+s]||0}</span></button>` });
       if(!subs.length) h+=`<span class="hint" style="padding:2px 24px">하위분야 없음</span>`;
@@ -742,7 +953,18 @@ $('#sort').addEventListener('click',e=>{ const b=e.target.closest('button'); if(
 document.querySelector('.rail').addEventListener('click',e=>{
   const t=e.target.closest('[data-type]'),c=e.target.closest('[data-cat]'),s=e.target.closest('[data-sub]'),g=e.target.closest('[data-tag]'),m=e.target.closest('[data-mine]'),k=e.target.closest('[data-col]');
   if(t) S.type=t.dataset.type;
-  if(c){ S.cat=c.dataset.cat; S.sub=null; }
+  if(c){
+    const n=c.dataset.cat;
+    if(n==='all'){ S.cat='all'; S.sub=null; S.openCats=[]; }
+    else{
+      const wasOpen=S.openCats.includes(n);
+      // 다시 누르면 접고 필터도 푼다. 다른 분야의 펼침은 건드리지 않는다.
+      S.openCats=wasOpen?S.openCats.filter(x=>x!==n):[...S.openCats,n];
+      if(wasOpen&&S.cat===n){ S.cat='all'; S.sub=null; }
+      else{ S.cat=n; S.sub=null; }
+      LS.set('toolbox.openCats',S.openCats);
+    }
+  }
   if(s) S.sub=S.sub===s.dataset.sub?null:s.dataset.sub;
   if(g) S.tag=S.tag===g.dataset.tag?null:g.dataset.tag;
   if(m) S.mine=!S.mine;
@@ -778,6 +1000,40 @@ $('#list').addEventListener('click',async e=>{
   const r=e.target.closest('.row'); if(!r) return;
   S.sel=S.sel===r.dataset.id?null:r.dataset.id; S.cursor=+r.dataset.i; render();
 });
+/* 화면 고르기: 시간대 스킨과 밝게/어둡게. 둘 다 기본은 자동이고 직접 고를 수 있다. */
+const SKINS=[{k:'auto',n:'시간에 맞춰',h:''},{k:'dawn',n:'아침',h:'06–14'},{k:'day',n:'낮·저녁',h:'14–22'},{k:'night',n:'밤',h:'22–06'}];
+const THEMES=[{k:'auto',n:'기기 설정에 맞춰'},{k:'light',n:'밝게'},{k:'dark',n:'어둡게'}];
+const autoSkin=()=>{ const h=new Date().getHours(); return h<6?'night':h<14?'dawn':h<22?'day':'night' };
+const getSkin=()=>{ const v=LS.get('toolbox.skin',''); return SKINS.some(x=>x.k===v&&v!=='auto')?v:'auto' };
+const getTheme=()=>{ const v=LS.get('toolbox.theme',''); return (v==='light'||v==='dark')?v:'auto' };
+function applyScreen(){
+  const sk=getSkin(), th=getTheme();
+  document.documentElement.dataset.skin = sk==='auto'?autoSkin():sk;
+  if(th==='auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme=th;
+}
+function closeSkinPop(){ const p=$('#skinPop'); if(p) p.remove(); $('#skinBtn').setAttribute('aria-expanded','false'); }
+function openSkinPop(){
+  if($('#skinPop')) return closeSkinPop();
+  const sk=getSkin(), th=getTheme();
+  const box=document.createElement('div'); box.className='skinpop'; box.id='skinPop';
+  box.innerHTML=`<h5>시간대</h5>${SKINS.map(o=>`<button data-skin="${o.k}"><span class="mk">${o.k===sk?'●':''}</span>${esc(o.n)}${o.h?`<small>${o.h}</small>`:''}</button>`).join('')}
+    <h5>화면</h5>${THEMES.map(o=>`<button data-theme="${o.k}"><span class="mk">${o.k===th?'●':''}</span>${esc(o.n)}</button>`).join('')}`;
+  $('#skinBtn').parentElement.appendChild(box);
+  $('#skinBtn').setAttribute('aria-expanded','true');
+  box.addEventListener('click',e=>{
+    const a=e.target.closest('[data-skin]'), b=e.target.closest('[data-theme]');
+    if(a) LS.set('toolbox.skin',a.dataset.skin);
+    if(b) LS.set('toolbox.theme',b.dataset.theme);
+    if(a||b){ applyScreen(); closeSkinPop(); openSkinPop(); }
+  });
+}
+$('#skinBtn').addEventListener('click',e=>{ e.stopPropagation(); openSkinPop(); });
+document.addEventListener('click',e=>{ if($('#skinPop')&&!e.target.closest('.skinbtn')) closeSkinPop(); });
+// 자동일 때 시간대가 넘어가면 알아서 바뀐다 (8시간마다 한 번)
+setInterval(()=>{ if(getSkin()==='auto'&&document.documentElement.dataset.skin!==autoSkin()) applyScreen(); },60000);
+applyScreen();
+
 $('#addBtn').addEventListener('click',()=>openForm(null));
 $('#moreBtn').addEventListener('click',openMore);
 $('#reviewBtn').addEventListener('click',()=>{ S.view=S.view==='review'?'list':'review'; render(); });
@@ -785,7 +1041,7 @@ document.addEventListener('keydown',e=>{
   if(e.isComposing||e.keyCode===229) return;                                 // 한글 조합 중(IME)에는 단축키를 잡지 않는다
   const inField=/input|textarea|select/i.test(e.target.tagName);
   const onControl=/button|a|summary|details/i.test(e.target.tagName);        // 버튼·링크에 포커스가 있으면 Enter 는 그쪽 몫
-  if(e.key==='Escape'){ if($('#modalRoot').firstChild){ closeModal(); return; } if(inField){ e.target.blur(); } else if(S.sel){ S.sel=null; render(); } return; }
+  if(e.key==='Escape'){ if($('#skinPop')){ closeSkinPop(); return; } if($('#modalRoot').firstChild){ closeModal(); return; } if(inField){ e.target.blur(); } else if(S.sel){ S.sel=null; render(); } return; }
   if($('#modalRoot').firstChild||S.view!=='list') return;
   if(e.key==='/'&&!inField){ e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
   if(e.key==='n'&&!inField){ e.preventDefault(); openForm(null); return; }
@@ -1249,6 +1505,7 @@ render();
   store=ready?SupabaseStore():LocalStore();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
   store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||'',suggestedName:me.suggestedName||''}); S.admin=!!me.admin; render(); });
+  S.openCats=(LS.get('toolbox.openCats',[])||[]).filter(x=>typeof x==='string');
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));
