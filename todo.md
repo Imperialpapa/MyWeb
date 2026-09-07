@@ -2,7 +2,8 @@
 
 ## 바로 할 것
 - [x] **AI 기능 배포 완료** (2026-09-07). Edge Function `ai` 배포, `ANTHROPIC_API_KEY` 등록, `schema.sql` 재실행 완료
-- [ ] **사이트에서 AI 동작 확인**: 로그인 → ＋추가 → 제목·주소 넣고 **✦ AI 분류 제안**. 운영자로 분야 옆 **✦ AI 정리** 도 한 번
+- [x] **AI 분류 제안 동작 확인 완료** (2026-09-07)
+- [ ] 운영자로 **✦ AI 정리** (재분류 표, 분야 구조 개편안) 한 번 눌러 보기
   (함수 코드를 고치면 `npx supabase functions deploy ai` 만 다시 실행. 로그는 대시보드 Edge Functions → ai → Logs)
 - [ ] **운영자 지정**: Supabase SQL Editor 에서 실행 (README 6단계). 실행 후 사이트에 "운영자" 표시·"검토함" 버튼 확인
   ```sql

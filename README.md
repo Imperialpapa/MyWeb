@@ -177,4 +177,9 @@ Vercel 프로젝트 **Settings → Domains** 에서 도메인을 추가하고, �
 - **"실시간 연결 끊김"**: 새로고침하면 최신 내용을 다시 불러옵니다. 계속되면 `schema.sql` 의 실시간 설정 부분을 다시 실행하세요.
 - **올리기가 "저장하지 못했습니다"**: 로그인 후 이름을 정했는지, `schema.sql` 을 끝까지 실행했는지 확인.
 - **AI 버튼이 "아직 배포되지 않았습니다"**: 7단계의 `functions deploy ai` 를 아직 안 한 상태. **"ANTHROPIC_API_KEY 가 설정되지 않았습니다"** 는 `secrets set` 을 빠뜨린 것.
+- **"ANTHROPIC_API_KEY 가 올바르지 않습니다"**: 키가 틀렸습니다. 안내문의 `sk-ant-...` 를 그대로 복사해 넣은 경우가 가장 흔합니다.
+  `npx supabase secrets list` 는 값을 해시로만 보여 주지만, 예시 문구가 들어갔는지는 해시를 비교하면 알 수 있습니다
+  (`sk-ant-...` 의 SHA-256 은 `dda59792fb6824cc0ee170a9202eb02bd83dacac5ccfa96ba0e8954c5b9246a6`).
+  실제 키로 다시 `secrets set` 하면 함수를 재배포하지 않아도 바로 반영됩니다.
+- **`npx supabase login` 이 "non-TTY environments" 오류**: Claude Code 같은 도구 안이 아니라 **직접 연 PowerShell 창**에서 실행해야 합니다.
 - **AI 버튼이 안 보임**: `config.js` 의 `AI` 가 `false` 이거나 미리보기 모드. 운영자용 **✦ AI 정리** 는 운영자 지정(6단계) 후에 나타남.
