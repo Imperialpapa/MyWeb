@@ -6,6 +6,9 @@
 //   organize : 여러 항목(최대 30개)을 다시 분류해 바꿀 것만 제안     — 운영자
 //   taxonomy : 전체 자료를 보고 분야·하위분야 구조 개편안 제안        — 운영자
 //   expand   : 고른 분야에 넣을 자료를 새로 제안 (링크 생존·중복·위험 명령은 서버가 검증) — 운영자
+//
+// 분야는 이름이 아니라 **id** 로 오간다. 화면은 categoryId 를 보내고, 응답은 {categoryId, category} 를 함께 준다.
+// settings 의 분야에 id 가 하나라도 없으면 자동으로 옛 이름 방식으로 강등한다(idMode). 배포 순서가 어긋나도 죽지 않게.
 // 이 함수는 데이터베이스를 읽기만 한다. 적용(쓰기)은 브라우저가 사용자 권한(RLS)으로 한다.
 //
 // 배포:  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
@@ -30,7 +33,7 @@ const LINK_CONCURRENCY = 6;      // 동시에 두드릴 링크 수
 // 상대 서버가 우리를 알아보고 막거나 허용할 수 있게 신분을 밝힌다 (헤더 값은 ASCII 만 들어간다)
 const LINK_UA = "quickref-linkcheck/1.0 (+https://my-web-imperialpapas-projects.vercel.app)";
 // 텍스트 필드 상한 (프롬프트 길이 = 비용이므로 서버에서 자른다)
-const CAP = { title: 200, url: 500, lang: 40, body: 1200, category: 60, sub: 60, tag: 40, tags: 10, hint: 30, topic: 80 };
+const CAP = { title: 200, url: 500, lang: 40, body: 1200, category: 60, catId: 64, sub: 60, tag: 40, tags: 10, hint: 30, topic: 80 };
 const cut = (v: unknown, n: number) => String(v ?? "").slice(0, n);
 const cutArr = (v: unknown, n: number, each: number) =>
   (Array.isArray(v) ? v : []).slice(0, n).map((x) => cut(x, each)).filter(Boolean);
@@ -55,23 +58,35 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
 
-type Cat = { name: string; subs: string[] };
+type Cat = { id: string; name: string; subs: string[] };
 type Row = {
   id: string; type: string; title: string; url: string; lang: string; body: string;
-  category: string; sub: string; tags: string[];
+  category: string; category_id?: string; sub: string; tags: string[];
 };
 
-const SITE_RULES = `당신은 "빠른 연결"이라는 한국어 공유 자료함의 분류 담당 에이전트다.
+// 분류 규칙의 첫 줄은 모드를 따라가야 한다. 이름 모드(idMode=false)일 때 출력 스키마는
+// category(이름)를 요구하는데 프롬프트가 "id 를 돌려준다" 고 시키면 정반대라,
+// 모델이 이름 자리에 id 를 적거나 헤매다 엉뚱한 분야를 고른다.
+const SITE_RULES = (idMode: boolean) => `당신은 "빠른 연결"이라는 한국어 공유 자료함의 분류 담당 에이전트다.
 사람들이 링크·메모·코드·자료를 올리면 분야(category), 하위분야(sub), 태그(tags)로 정리한다.
 
 분류 규칙:
-- category 는 반드시 아래 "분야 목록"에 있는 이름 중 하나를 그대로 쓴다.
+${idMode
+  ? `- category_id 는 반드시 아래 "분야 목록"의 대괄호 안에 있는 id 중 하나를 그대로 쓴다. 이름이 아니라 id 를 돌려준다.`
+  : `- category 는 반드시 아래 "분야 목록"에 있는 분야 이름 중 하나를 글자 그대로 쓴다. 이름을 새로 지어내지 않는다.`}
 - sub 는 그 분야의 기존 하위분야 중 가장 맞는 것을 우선 쓴다. 정말 맞는 것이 없을 때만 새 하위분야를 짧게(2~8자) 제안한다. 여러 단어는 가운뎃점(·)으로 잇는다. 예: "CLI·스크립트".
 - tags 는 2~5개. 짧은 명사, 공백과 # 없이. 영어는 소문자(docker, python). 이미 많이 쓰이는 태그가 맞으면 그것을 재사용한다.
 - 내용을 지어내지 않는다. URL 과 제목만으로 무엇인지 확실히 알 수 없으면 보수적으로 분류한다.`;
 
 function catsText(cats: Cat[]) {
-  return cats.map((c) => `- ${c.name}${c.subs.length ? ": " + c.subs.join(", ") : " (하위분야 없음)"}`).join("\n");
+  // 분야 이름·하위분야도 남이 쓴 글이다. 운영자가 정하지만 AI 가 지은 이름이 taxonomy 적용으로
+  // 그대로 저장되는 길이 있어, 시스템 프롬프트에 들어가는 다른 사용자 글과 똑같이 한 줄로 눕힌다.
+  // id 는 있을 때만 붙인다. 이름 모드에서는 id 가 비어 있어 그냥 두면 "- [] 이름" 이 나가,
+  // "대괄호 안의 id" 를 쓰라는 규칙과 어긋나는 목록을 보여 주게 된다.
+  return cats.map((c) => {
+    const subs = c.subs.map((s) => flat(s, CAP.sub)).filter(Boolean);
+    return `- ${c.id ? `[${c.id}] ` : ""}${flat(c.name, CAP.category)}${subs.length ? ": " + subs.join(", ") : " (하위분야 없음)"}`;
+  }).join("\n");
 }
 function itemText(r: Partial<Row>) {
   const parts = [
@@ -293,11 +308,14 @@ async function ask(
 }
 
 const strArr = { type: "array", items: { type: "string" } };
-const classifyProps = (catNames: string[]) => ({
-  category: { type: "string", enum: catNames },
-  sub: { type: "string" },
-  tags: strArr,
-});
+// id 모드면 모델이 id 를 고르게 한다. 구조화 출력의 enum 이 목록 밖의 값을 원천 봉쇄하므로
+// "없는 분야" 가 올 수 없고, 나중에 이름을 id 로 옮기다 실패하는 지점도 사라진다.
+const classifyProps = (idMode: boolean, catIds: string[], catNames: string[]) => (
+  idMode
+    ? { category_id: { type: "string", enum: catIds }, sub: { type: "string" }, tags: strArr }
+    : { category: { type: "string", enum: catNames }, sub: { type: "string" }, tags: strArr }
+);
+const classifyKey = (idMode: boolean) => (idMode ? "category_id" : "category");
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -341,12 +359,31 @@ Deno.serve(async (req) => {
   };
 
   // 분야 목록 (settings.categories)
-  const { data: setting } = await sb.from("settings").select("value").eq("key", "categories").maybeSingle();
+  // 조회 오류를 버리면 안 된다. 못 읽은 것과 정말로 비어 있는 것은 다른 일인데,
+  // 한데 뭉치면 분야가 멀쩡히 있는 운영자에게 "분야를 먼저 만들어 주세요" 가 나가 원인을 짚을 수 없다.
+  const { data: setting, error: setErr } = await sb.from("settings").select("value").eq("key", "categories").maybeSingle();
+  if (setErr) return fail("분야 목록을 읽지 못했습니다. 잠시 후 다시 시도해 주세요", 500);
   const cats: Cat[] = (((setting?.value as { list?: unknown })?.list as Cat[]) || [])
-    .map((c) => ({ name: String(c.name || ""), subs: Array.isArray(c.subs) ? c.subs.map(String) : [] }))
+    .map((c) => ({
+      id: cut(c.id, CAP.catId),
+      name: String(c.name || ""),
+      subs: Array.isArray(c.subs) ? c.subs.map(String) : [],
+    }))
     .filter((c) => c.name);
   if (!cats.length) return fail("분야 목록이 비어 있습니다. 운영자가 분야를 먼저 만들어 주세요");
   const catNames = cats.map((c) => c.name);
+  const catIds = cats.map((c) => c.id);
+  // id 가 하나라도 비었거나 겹치면 이름으로 답하게 되돌린다.
+  // 빈 enum 은 무효라서, 이 강등이 없으면 스키마가 깨져 AI 기능 전체가 죽는다.
+  const idMode = catIds.every(Boolean) && new Set(catIds).size === catIds.length;
+  // 빈 id 를 넣으면 안 된다. 키 "" 하나에 마지막 분야만 남아, get("") 이 그것을 돌려준다.
+  const catById = new Map(cats.filter((c) => c.id).map((c) => [c.id, c]));
+  const catByName = new Map(cats.map((c) => [c.name, c]));
+  // 분류 결과를 {categoryId, category} 한 쌍으로 정규화한다. 화면은 둘 다 받는다.
+  const pickCat = (out: { category_id?: string; category?: string }) => {
+    const c = idMode ? catById.get(String(out.category_id || "")) : catByName.get(String(out.category || ""));
+    return { categoryId: c ? c.id : "", category: c ? c.name : "", cat: c };
+  };
   const client = new Anthropic({ apiKey });
 
   try {
@@ -354,14 +391,18 @@ Deno.serve(async (req) => {
     if (action === "suggest") {
       const src = body.item || {};
       // 프롬프트에 들어갈 값은 전부 서버에서 자른다 (길이 = 비용)
+      const srcCatId = cut((src as { categoryId?: string }).categoryId, CAP.catId);
       const it: Partial<Row> = {
         type: cut(src.type, 20), title: cut(src.title, CAP.title), url: cut(src.url, CAP.url),
         lang: cut(src.lang, CAP.lang), body: cut(src.body, CAP.body),
-        category: cut(src.category, CAP.category), sub: cut(src.sub, CAP.sub),
+        // 화면이 categoryId 를 보내면 그것으로 이름을 찾는다. 이름만 오면 이름을 그대로 쓴다(옛 화면).
+        // 빈 id 로는 조회하지 않는다. 조회하면 "현재 분야" 가 엉뚱한 분야로 바뀌어 프롬프트에 실린다.
+        category: (srcCatId && catById.get(srcCatId)?.name) || cut(src.category, CAP.category),
+        sub: cut(src.sub, CAP.sub),
         tags: cutArr(src.tags, CAP.tags, CAP.tag),
       };
       if (!(it.title || it.url || it.body)) return fail("제목, 주소, 내용 중 하나는 있어야 합니다");
-      const system = `${SITE_RULES}
+      const system = `${SITE_RULES(idMode)}
 
 분야 목록:
 ${catsText(cats)}
@@ -374,26 +415,36 @@ ${catsText(cats)}
 - reason: 왜 그렇게 분류했는지 30자 이내.`;
       const schema = {
         type: "object",
-        properties: { ...classifyProps(catNames), title: { type: "string" }, body: { type: "string" }, reason: { type: "string" } },
-        required: ["category", "sub", "tags", "title", "body", "reason"],
+        properties: { ...classifyProps(idMode, catIds, catNames), title: { type: "string" }, body: { type: "string" }, reason: { type: "string" } },
+        required: [classifyKey(idMode), "sub", "tags", "title", "body", "reason"],
         additionalProperties: false,
       };
       const gate = await takeQuota(); if (gate) return gate;
       const out = await ask(client, system, `다음 항목을 분류해 주세요.\n\n${itemText(it)}`, schema, { max_tokens: 8000, effort: "low", label: "suggest", timeout_ms: 60_000 }, call);
-      const cat = cats.find((c) => c.name === out.category);
-      return json({ ...out, newSub: !!(cat && out.sub && !cat.subs.includes(out.sub)) });
+      // 화면에는 id 와 이름을 함께 준다. 옛 화면은 이름만 읽고, 새 화면은 id 로 잇는다.
+      const got = pickCat(out);
+      return json({
+        ...out, categoryId: got.categoryId, category: got.category,
+        newSub: !!(got.cat && out.sub && !got.cat.subs.includes(out.sub)),
+      });
     }
 
     // ---------- 2) 여러 항목 다시 분류 (운영자) ----------
     if (action === "organize") {
       const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).filter((x) => /^[A-Za-z0-9_-]{1,64}$/.test(x)).slice(0, MAX_ORGANIZE);
       if (!ids.length) return fail("다시 분류할 항목 id 가 없습니다");
-      const [{ data: rows }, { data: allRows }] = await Promise.all([
-        sb.from("items").select("id,type,title,url,lang,body,category,sub,tags").in("id", ids),
+      const [rowsRes, allRes] = await Promise.all([
+        sb.from("items").select("id,type,title,url,lang,body,category,category_id,sub,tags").in("id", ids),
         sb.from("items").select("tags").limit(5000),
       ]);
+      // 오류를 버리면 안 된다. category_id 컬럼이 아직 없으면 data 가 null 로 와서
+      // "항목을 찾지 못했습니다" 가 나가고, 항목이 멀쩡히 보이는 운영자는 원인을 짐작할 수 없다.
+      if (rowsRes.error || allRes.error) {
+        return fail("자료를 읽지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
+      }
+      const rows = rowsRes.data, allRows = allRes.data;
       if (!rows || !rows.length) return fail("항목을 찾지 못했습니다", 422);   // 404 는 브라우저가 '함수 미배포' 로 오해한다
-      const system = `${SITE_RULES}
+      const system = `${SITE_RULES(idMode)}
 
 분야 목록:
 ${catsText(cats)}
@@ -412,8 +463,8 @@ ${catsText(cats)}
             type: "array",
             items: {
               type: "object",
-              properties: { id: { type: "string" }, ...classifyProps(catNames), changed: { type: "boolean" }, reason: { type: "string" } },
-              required: ["id", "category", "sub", "tags", "changed", "reason"],
+              properties: { id: { type: "string" }, ...classifyProps(idMode, catIds, catNames), changed: { type: "boolean" }, reason: { type: "string" } },
+              required: ["id", classifyKey(idMode), "sub", "tags", "changed", "reason"],
               additionalProperties: false,
             },
           },
@@ -437,13 +488,20 @@ ${catsText(cats)}
       const byId = new Map<string, Row>(rows.map((r: Row) => [r.id, r]));
       const proposals = (out.proposals || [])
         .filter((p: { id: string }) => byId.has(p.id))
-        .map((p: Row & { changed: boolean; reason: string }) => {
+        .map((p: Row & { category_id?: string; changed: boolean; reason: string }) => {
           const cur = byId.get(p.id)!;
-          const same = cur.category === p.category && (cur.sub || "") === (p.sub || "") &&
+          const got = pickCat(p);
+          // 같은 분야인지는 id 로 본다. 이름으로 비교하면 과도기에 30개가 전부 "바뀜" 으로 뜨고,
+          // 운영자가 그대로 적용하면 필요 없는 대량 쓰기가 된다.
+          const sameCat = idMode ? (cur.category_id || "") === got.categoryId : cur.category === got.category;
+          const same = sameCat && (cur.sub || "") === (p.sub || "") &&
             JSON.stringify((cur.tags || []).slice().sort()) === JSON.stringify((p.tags || []).slice().sort());
-          const cat = cats.find((c) => c.name === p.category);
           const link = linkBy.get(p.id) || { state: "none" as LinkState, status: 0, note: "" };
-          return { ...p, changed: p.changed && !same, newSub: !!(cat && p.sub && !cat.subs.includes(p.sub)), link };
+          return {
+            ...p, categoryId: got.categoryId, category: got.category,
+            changed: p.changed && !same,
+            newSub: !!(got.cat && p.sub && !got.cat.subs.includes(p.sub)), link,
+          };
         });
       // 실제로 판단이 돌아온 항목의 id 만 돌려준다. 브라우저가 이걸로 checked_at 을 찍는다.
       // 고칠 게 없다고 한 항목도 "봤다" 고 남기되, 모델이 응답에서 빠뜨린 항목까지 찍으면
@@ -455,21 +513,41 @@ ${catsText(cats)}
     if (action === "taxonomy") {
       const { data: rows } = await sb.from("items").select("type,title,category,sub,tags").order("created_at", { ascending: false }).limit(MAX_TAXONOMY_ITEMS);
       const list = (rows || []) as Pick<Row, "type" | "title" | "category" | "sub" | "tags">[];
-      const system = `${SITE_RULES}
+      const system = `${SITE_RULES(idMode)}
 
 당신의 일: 현재 분야 구조와 전체 자료 목록을 보고, 더 찾기 쉬운 분야·하위분야 구조를 제안한다.
 
 원칙:
-- 기존 분야 이름은 가능하면 그대로 둔다. 이름을 바꾸면 이미 올라간 항목의 분야 표기가 어긋난다. 꼭 바꿔야 하면 notes 에 "○○ → △△ 로 바꾸면 항목 N개를 수정해야 함" 처럼 적는다.
+${idMode
+  ? `- 분야 이름은 자유롭게 바꿔도 된다. 자료와 담당자는 이름이 아니라 id 로 이어져 있어 개명을 따라온다.
+- 대신 비싼 것은 **삭제와 병합**이다. 자료가 든 분야를 없애려면 그 자료를 먼저 다른 분야로 옮겨야 한다. 꼭 필요하면 notes 에 "○○ 를 없애려면 자료 N개를 △△ 로 옮겨야 함" 처럼 적는다.
+- 기존 분야는 id 를 그대로 돌려준다. 새로 만들자는 분야만 id 를 빈 문자열("")로 둔다. id 를 지어내지 마라.
+- 한 분야를 둘로 나눌 때는 **자료가 더 많이 남는 쪽**에 기존 id 를 주고, 새로 갈라져 나오는 쪽은 id 를 빈 문자열("")로 둔다. id 가 붙은 줄의 이름을 바꾸면 그 분야에 든 자료 전부의 분야 표기가 따라 바뀌기 때문이다.
+- 같은 id 를 두 줄에 쓰지 않는다. 한 id 는 한 줄에만.`
+  : `- 기존 분야 이름은 그대로 둔다. 지금은 이름이 자료를 잇는 키라서, 이름을 바꾸면 이미 올라간 자료의 분야 표기가 어긋난다. 꼭 바꿔야 하면 notes 에만 적는다.
+- 자료가 든 분야를 없애려면 그 자료를 먼저 다른 분야로 옮겨야 한다. 꼭 필요하면 notes 에 "○○ 를 없애려면 자료 N개를 △△ 로 옮겨야 함" 처럼 적는다.
+- id 는 전부 빈 문자열("")로 둔다.`}
 - 하위분야는 항목이 실제로 모이는 곳에만 둔다. 자료가 3개 이상 몰리는데 하위분야가 없으면 새로 만들고, 항목이 하나도 없고 앞으로도 쓰일 것 같지 않은 하위분야는 뺀다.
 - 분야당 하위분야 3~7개가 적당하다. 이름은 2~8자, 여러 단어는 가운뎃점(·)으로.
 - notes 에는 바꾼 이유를 한 줄씩(각 60자 이내) 쓴다. 바꿀 것이 없으면 그렇게 적는다.`;
       const user = `현재 분야 구조:\n${catsText(cats)}\n\n전체 자료 ${list.length}개 (종류 | 제목 | 분야 › 하위분야 | 태그):\n` +
-        list.map((r) => `${r.type} | ${String(r.title || "").slice(0, 60)} | ${r.category || "-"}${r.sub ? " › " + r.sub : ""} | ${(r.tags || []).join(",")}`).join("\n");
+        // 이 표는 한 줄이 자료 하나다. 제목·태그·분야 이름·하위분야 어디든 줄바꿈이 있으면
+        // 없는 자료가 몇 줄 더 생긴 것처럼 보인다. 제목은 로그인한 누구나 넣을 수 있는 값이라 특히 그렇다.
+        // 위의 "현재 분야 구조" 도 catsText 가 눕혀서 넣으므로 여기서도 같은 모양으로 맞춰야 두 목록이 서로 맞는다.
+        list.map((r) => `${r.type} | ${flat(r.title, 60)} | ${flat(r.category, CAP.category) || "-"}${r.sub ? " › " + flat(r.sub, CAP.sub) : ""} | ${(r.tags || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(",")}`).join("\n");
       const schema = {
         type: "object",
         properties: {
-          list: { type: "array", items: { type: "object", properties: { name: { type: "string" }, subs: strArr }, required: ["name", "subs"], additionalProperties: false } },
+          list: {
+            type: "array",
+            items: {
+              type: "object",
+              // 기존 분야면 그 id, 새로 만들자는 분야면 "". 모델이 id 를 발급하지 못하게 enum 으로 가둔다.
+              properties: { id: { type: "string", enum: [...catIds.filter(Boolean), ""] }, name: { type: "string" }, subs: strArr },
+              required: ["id", "name", "subs"],
+              additionalProperties: false,
+            },
+          },
           notes: strArr,
         },
         required: ["list", "notes"],
@@ -477,18 +555,45 @@ ${catsText(cats)}
       };
       const gate = await takeQuota(); if (gate) return gate;
       const out = await ask(client, system, user, schema, { max_tokens: 16000, effort: "medium", label: "taxonomy", timeout_ms: 100_000 }, call);
-      return json({ list: out.list || [], notes: out.notes || [], itemCount: list.length });
+      // id 가 정본이 된 뒤로, id 가 붙은 줄의 이름을 바꾸는 것은 그 분야에 든 자료 전부의
+      // 표시 이름을 바꾸는 일이다. 스키마의 enum 은 "목록 밖 id" 만 막을 뿐 어느 id 가 어느 이름에
+      // 붙었는지는 보지 않는다. 모델이 분야를 쪼개며 같은 id 를 양쪽에 붙이기만 해도
+      // 자료 수십 개가 오류 하나 없이 남의 이름 밑으로 들어가므로, 서버가 한 번 훑어 막는다.
+      const usedIds = new Set<string>();
+      const outList = (Array.isArray(out.list) ? out.list : []).map((row: { id?: string; name?: string; subs?: string[] }) => {
+        // 이름은 여기서 길이만 자른다. flat() 으로 다듬지는 않는다 — 운영자가 고칠 제안 문구를
+        // 서버가 말없이 바꾸는 것이 되고, 아래 개명 판정(now !== name)도 흔들린다.
+        // 자르지 않으면 60자를 넘는 이름이 화면을 지나 저장할 때 트리거에 걸린다.
+        const name = cut(row?.name, CAP.category);
+        let id = cut(row?.id, CAP.catId).trim();
+        // 목록에 없는 id 와 앞줄이 이미 가져간 id 는 새 분야로 강등한다(id 를 "" 로).
+        // 강등된 줄은 화면에서 새로 만드는 분야가 되므로 남의 자료를 끌고 가지 않는다.
+        if (id && (!catById.has(id) || usedIds.has(id))) id = "";
+        if (id) usedIds.add(id);
+        // id→지금 이름 대응은 서버만 확실히 안다. 화면이 "개명: A → B · 자료 N개가 따라갑니다" 를
+        // 보여 줄 수 있게 지금 이름을 실어 준다. 이름이 그대로거나 새 분야면 빈 문자열.
+        const now = id ? (catById.get(id)?.name || "") : "";
+        return { ...row, id, name, renamedFrom: now && now !== name ? now : "" };
+      });
+      return json({ list: outList, notes: out.notes || [], itemCount: list.length });
     }
 
     // ---------- 4) 분야에 자료 제안 (운영자) ----------
     if (action === "expand") {
-      // 분야 이름은 화면의 "분야: 하위1, 하위2" 편집 형식으로 다시 저장되므로 쉼표·콜론을 미리 뺀다
-      const cleanCat = (v: unknown) => flat(v, CAP.category).replace(/[:：,，]/g, " ").replace(/\s{2,}/g, " ").trim();
-      const asked = cleanCat(body.category);
-      if (!asked) return fail("분야를 골라 주세요");
-      // 다듬은 이름이 기존 분야와 같아지면 그 분야의 원래 이름을 쓴다. 안 그러면 같은 분야가 둘로 갈라진다.
-      const match = cats.find((c) => c.name === asked) || cats.find((c) => cleanCat(c.name) === asked);
-      const catName = match ? match.name : asked;
+      // 기존 분야는 id 로 받는다. 이름으로 흐릿하게 맞춰 보던 코드는 없앴다 — 정체성은 id 가 정한다.
+      // 새 분야를 만들 때만 이름을 받는다.
+      const wantId = cut((body as { categoryId?: string }).categoryId, CAP.catId).trim();
+      // 이름으로 맞춰 볼 때는 양쪽을 똑같이 눕혀서 본다. 들어온 이름만 flat() 을 거치면
+      // 저장된 이름에 이중 공백·머리 기호가 하나만 있어도 못 알아보고 "새 분야" 가 되어,
+      // 이미 있는 자료를 중복 검사 없이 그대로 다시 제안하고 화면은 중복 이름을 만들려 든다.
+      const wantName = flat(body.category, CAP.category);
+      const match = wantId
+        ? catById.get(wantId)
+        : (wantName ? cats.find((c) => flat(c.name, CAP.category) === wantName) : undefined);
+      const newName = flat((body as { newCategoryName?: string }).newCategoryName ?? body.category, CAP.category).trim();
+      if (!match && !newName) return fail("분야를 골라 주세요");
+      const catId = match ? match.id : "";
+      const catName = match ? match.name : newName;
       const isNew = !match;
       const topic = flat(body.topic, CAP.topic);
       const want = Math.min(Math.max(Math.floor(Number(body.count)) || MAX_EXPAND, 3), MAX_EXPAND);
@@ -497,10 +602,22 @@ ${catsText(cats)}
 
       // 이미 있는 자료를 알려 줘야 같은 것을 또 제안하지 않는다.
       // 자료가 늘어도 프롬프트가 커지지 않도록 세 가지만 넣는다: 그 분야 전체, 자주 쓰는 태그, 전체 호스트 목록.
-      const [{ data: sameCat }, { data: allRows }] = await Promise.all([
-        sb.from("items").select("type,title,url").eq("category", catName).limit(400),
+      // "새 분야" 와 "기존 분야인데 아직 id 를 못 이었다" 는 다른 상태다. 뒤엣것을 빈 목록으로
+      // 다루면 프롬프트가 "이 분야에는 자료가 없다" 고 거짓말하고, 제목 기준 중복 검사가 통째로 죽는다.
+      const [sameCatRes, allRes] = await Promise.all([
+        isNew
+          ? Promise.resolve({ data: [], error: null })
+          : (catId
+              ? sb.from("items").select("type,title,url").eq("category_id", catId).limit(400)
+              : sb.from("items").select("type,title,url").eq("category", catName).limit(400)),
         sb.from("items").select("url,tags").limit(2000),
       ]);
+      // 오류를 버리면 안 된다. 컬럼이 아직 없을 때 data 가 null 로 와서
+      // "이 분야에는 아직 자료가 없다" 고 말한 뒤 이미 있는 것을 그대로 다시 제안하게 된다.
+      if (sameCatRes.error || allRes.error) {
+        return fail("자료를 읽지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
+      }
+      const sameCat = sameCatRes.data, allRows = allRes.data;
       const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
       // 아래 목록은 전부 남이 써 넣은 글이다. 시스템 프롬프트에 들어가므로 한 줄로 눕혀서 넣는다.
       const hosts = [...new Set((allRows || []).map((r: { url?: string }) => host(r.url || "")).filter(Boolean))];
@@ -521,7 +638,7 @@ ${catsText(cats)}
         .sort((a, b) => b.frac - a.frac)
         .forEach((x) => { if (left > 0) { plan[x.k]++; left--; } });
 
-      const system = `${SITE_RULES}
+      const system = `${SITE_RULES(idMode)}
 
 분야 목록:
 ${catsText(cats)}${isNew ? `\n- ${catName} (이번에 새로 만드는 분야)` : ""}
@@ -651,7 +768,7 @@ ${topTags(allRows || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(", ")
 
       const got = { link: 0, note: 0, snippet: 0 } as Record<string, number>;
       finalItems.forEach((r: { type: string }) => { got[r.type] = (got[r.type] || 0) + 1; });
-      return json({ category: catName, isNew, items: finalItems, mixWanted: plan, mixGot: got, count: finalItems.length, want, dropped });
+      return json({ categoryId: catId, category: catName, isNew, items: finalItems, mixWanted: plan, mixGot: got, count: finalItems.length, want, dropped });
     }
 
     return fail("알 수 없는 action 입니다: " + String(body.action || ""));

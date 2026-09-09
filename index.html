@@ -567,7 +567,9 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
      putCol(col) / removeCol(id)
      addReport(r) / removeReports(ids)
      vote(id) → 'added' | 'dup'
-     saveCategories(list)     list = [{name, subs:[...]}]   (운영자만)
+     saveCategories(list)     list = [{id, name, subs:[...]}]   (운영자만)
+                              id 는 서버가 발급한다. 화면은 받은 것을 그대로 돌려보낼 뿐이고,
+                              새로 만드는 분야만 id 를 빈 문자열로 둔다.
      ai(action, payload)      Edge Function 'ai' 호출. suggest / organize / taxonomy
      auth: onAuth(cb), login(email), logout(), setName(name)
    SupabaseStore: 실제 서비스.  LocalStore: 설정이 비어 있을 때 미리보기.
@@ -575,24 +577,41 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
 const CFG=window.TOOLBOX_CONFIG||{};
 let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
 const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
-const DEFAULT_CATS=[{name:'개발·도구',subs:[]},{name:'생활·건강·취미',subs:[]},{name:'AI 에이전트',subs:[]},{name:'유머',subs:[]}];
-// 분야 하나: {name, subs, owner?, ownerName?}
+// 설정을 받기 전 첫 화면을 그리는 데만 쓴다. id·이름은 schema.sql 의 기본 분야와 같아야 한다.
+const DEFAULT_CATS=[{id:'dev',name:'개발·도구',subs:[]},{id:'life',name:'생활·건강·취미',subs:[]},{id:'ai',name:'AI 에이전트',subs:[]},{id:'humor',name:'유머',subs:[]}];
+// 분야 하나: {id, name, subs, owner?, ownerName?}
+//   id        분야를 잇는 정본. 이름은 바뀌어도 이것은 안 바뀐다. 서버가 발급한다.
+//             빈 문자열은 "아직 발급받지 않은 새 분야" 라는 뜻이다 (저장할 때 서버가 채운다).
 //   owner     주 관리자의 사용자 id. 없으면 운영자가 담당
 //   ownerName 그때의 닉네임 스냅샷. 로그인 안 한 사람도 담당자를 볼 수 있게 함께 저장한다
 const normCats=list=>(Array.isArray(list)?list:[]).map(c=>{
-  if(typeof c==='string') return {name:c,subs:[]};
-  const o={name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]};
+  if(typeof c==='string') return {id:'',name:c,subs:[]};
+  const o={id:c.id?String(c.id):'',name:String(c.name||''),subs:Array.isArray(c.subs)?c.subs.map(String):[]};
   if(c.owner) o.owner=String(c.owner);
   if(c.ownerName) o.ownerName=String(c.ownerName).slice(0,24);
   return o;
 }).filter(c=>c.name);
+/* 미리보기(LocalStore)에는 DB 트리거가 없다. 아래 둘이 그 자리를 대신한다.
+   실제 서비스에서는 서버가 같은 일을 하므로 화면 코드는 양쪽에서 똑같이 동작한다. */
+const newCatId=()=>'c'+Math.random().toString(36).slice(2,10);
+const withCatIds=list=>{ const seen=new Set(); return normCats(list).map(c=>{
+  let id=c.id; if(!id||seen.has(id)) id=newCatId(); seen.add(id); return {...c,id}; }); };
+// 자료의 분야 이름 사본을 목록에 맞추고, 이름만 있고 id 를 못 이은 자료를 주워 온다
+const syncItemCats=(items,cats)=>{ const byId={},byName={};
+  cats.forEach(c=>{ byId[c.id]=c; if(!byName[c.name]) byName[c.name]=c; });
+  items.forEach(it=>{
+    if(it.categoryId&&byId[it.categoryId]) it.category=byId[it.categoryId].name;
+    else if(!it.categoryId&&it.category&&byName[it.category]) it.categoryId=byName[it.category].id;
+  }); return items; };
 const LS={get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v) }catch(e){ return d } },set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} }};
 
 function LocalStore(){
   const K={items:'toolbox.items',cats:'toolbox.cats',cols:'toolbox.cols',reports:'toolbox.reports',votes:'toolbox.votes'};
-  const D={items:LS.get(K.items,null),cats:normCats(LS.get(K.cats,DEFAULT_CATS)),cols:LS.get(K.cols,[]),reports:LS.get(K.reports,[]),votes:LS.get(K.votes,[])};
+  const D={items:LS.get(K.items,null),cats:withCatIds(LS.get(K.cats,DEFAULT_CATS)),cols:LS.get(K.cols,[]),reports:LS.get(K.reports,[]),votes:LS.get(K.votes,[])};
   if(!D.items){ D.items=EXAMPLES.map(x=>({...x,example:true})); LS.set(K.items,D.items); }
-  if(!D.cats.length) D.cats=normCats(DEFAULT_CATS);
+  if(!D.cats.length) D.cats=withCatIds(DEFAULT_CATS);
+  // 옛 미리보기 자료에는 categoryId 가 없다. 이름으로 한 번 이어 준다.
+  syncItemCats(D.items,D.cats); LS.set(K.items,D.items); LS.set(K.cats,D.cats);
   const me={id:LS.get('toolbox.uid',null)||(()=>{ const v='u'+Math.random().toString(36).slice(2,10); LS.set('toolbox.uid',v); return v })(),name:LS.get('toolbox.name',''),email:'',admin:true};
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({items:D.items.slice(),cats:D.cats.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.votes.slice()}));
@@ -612,7 +631,7 @@ function LocalStore(){
     async addReport(r){ D.reports.push(r); LS.set(K.reports,D.reports); emit() },
     async removeReports(ids){ D.reports=D.reports.filter(x=>!ids.includes(x.id)); LS.set(K.reports,D.reports); emit() },
     async vote(id){ if(D.votes.includes(id)) return 'dup'; D.votes.push(id); LS.set(K.votes,D.votes); const i=D.items.findIndex(x=>x.id===id); if(i>=0) D.items[i].votes=(D.items[i].votes||0)+1; LS.set(K.items,D.items); emit(); return 'added' },
-    async saveCategories(list){ D.cats=normCats(list); LS.set(K.cats,D.cats); emit() },
+    async saveCategories(list){ D.cats=withCatIds(list); syncItemCats(D.items,D.cats); LS.set(K.cats,D.cats); LS.set(K.items,D.items); emit(); return D.cats.slice() },
     async people(){ return me.name?[{id:me.id,name:me.name}]:[] },
     async markChecked(ids){ const at=new Date().toISOString(); (ids||[]).forEach(id=>{ const it=D.items.find(x=>x.id===id); if(it) it.checkedAt=at; }); LS.set(K.items,D.items); emit(); return (ids||[]).length },
     async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
@@ -621,13 +640,16 @@ function LocalStore(){
 
 function SupabaseStore(){
   const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY);
-  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[]};
+  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[],catsRaw:null};
   const me={id:null,name:'',email:'',admin:false};
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({...D,items:D.items.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.myVotes.slice()}));
   // row ↔ item 변환
-  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null,checkedAt:r.checked_at||null});
-  const toItem=i=>({id:i.id,type:i.type,title:i.title,url:i.url||'',lang:i.lang||'',body:i.body||'',category:i.category||'',sub:i.sub||'',tags:i.tags||[],by:i.by||'',owner_id:i.ownerId||me.id,created_at:i.createdAt||new Date().toISOString(),updated_at:i.updatedAt||null});
+  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',categoryId:r.category_id||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null,checkedAt:r.checked_at||null});
+  // category_id 는 빈 문자열을 보내면 안 된다. 제약이 null 또는 형식에 맞는 값만 받는다.
+  // 이름 사본은 화면이 들고 있던 값 대신 id 에서 다시 끌어낸다. 낡은 이름을 함께 보내면
+  // 서버 트리거가 "분야 목록이 그 사이에 바뀌었습니다" 로 저장을 통째로 거절한다.
+  const toItem=i=>({id:i.id,type:i.type,title:i.title,url:i.url||'',lang:i.lang||'',body:i.body||'',category:(i.categoryId&&catName(i.categoryId))||i.category||'',category_id:i.categoryId||null,sub:i.sub||'',tags:i.tags||[],by:i.by||'',owner_id:i.ownerId||me.id,created_at:i.createdAt||new Date().toISOString(),updated_at:i.updatedAt||null});
   const fromCol=r=>({id:r.id,title:r.title,desc:r.desc||'',itemIds:r.item_ids||[],by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null});
   const toCol=c=>({id:c.id,title:c.title,desc:c.desc||'',item_ids:c.itemIds||[],by:c.by||'',owner_id:c.ownerId||me.id,created_at:c.createdAt||new Date().toISOString(),updated_at:c.updatedAt||null});
   const fromRep=r=>({id:r.id,itemId:r.item_id,reason:r.reason,note:r.note||'',by:r.by||'',reporterId:r.reporter_id,createdAt:r.created_at});
@@ -639,7 +661,10 @@ function SupabaseStore(){
       if(error){ DB_ERR=error.message||'자료를 불러오지 못했습니다'; setConn('err'); } else { DB_ERR=''; D.items=(data||[]).map(fromItem); } }
     if(t==='collections'){ const {data,error}=await sb.from('collections').select('*'); if(!error) D.cols=(data||[]).map(fromCol); }
     if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(!error) D.reports=(data||[]).map(fromRep); } }
-    if(t==='settings'){ const {data}=await sb.from('settings').select('value').eq('key','categories').maybeSingle(); const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; }
+    if(t==='settings'){ const {data}=await sb.from('settings').select('value').eq('key','categories').maybeSingle();
+      // list 말고도 들어 있는 값(버전 표시 등)은 그대로 들고 있다가 저장할 때 돌려준다
+      if(data&&data.value&&typeof data.value==='object') D.catsRaw=data.value;
+      const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; }
     if(t==='votes'){ if(!me.id){ D.myVotes=[]; } else { const {data}=await sb.from('votes').select('item_id'); D.myVotes=(data||[]).map(r=>r.item_id); } }
     emit();
   }
@@ -713,7 +738,12 @@ function SupabaseStore(){
       }
       bump('items');
     },
-    async patch(id,p){ const row={}; ['title','category','sub','tags','body'].forEach(k=>{ if(k in p) row[k]=p[k]; }); if('updatedAt' in p) row.updated_at=p.updatedAt; const {error}=await sb.from('items').update(row).eq('id',id); if(error) fail(error); bump('items'); },
+    async patch(id,p){ const row={}; ['title','category','sub','tags','body'].forEach(k=>{ if(k in p) row[k]=p[k]; });
+      if('categoryId' in p) row.category_id=p.categoryId||null;
+      // 이름 사본은 id 에서 다시 끌어낸다 (toItem 과 같은 이유). 부른 쪽이 들고 있던 이름이 낡았으면
+      // 이름만 다르게 들어온 것으로 보여 서버가 저장을 거절한다.
+      if(p.categoryId) row.category=catName(p.categoryId)||p.category||'';
+      if('updatedAt' in p) row.updated_at=p.updatedAt; const {error}=await sb.from('items').update(row).eq('id',id); if(error) fail(error); bump('items'); },
     async remove(id){ const {error}=await sb.from('items').delete().eq('id',id); if(error) fail(error); bump('items'); },
     async putCol(c){
       const row=toCol(c);
@@ -729,7 +759,12 @@ function SupabaseStore(){
     async addReport(r){ const {error}=await sb.from('reports').insert({id:r.id,item_id:r.itemId,reason:r.reason,note:r.note||'',by:r.by||'',reporter_id:me.id}); if(error) fail(error); bump('reports'); },
     async removeReports(ids){ if(!ids.length) return; const {error}=await sb.from('reports').delete().in('id',ids); if(error) fail(error); bump('reports'); },
     async vote(id){ const {error}=await sb.from('votes').insert({item_id:id,user_id:me.id}); if(error){ if(error.code==='23505') return 'dup'; fail(error); } D.myVotes.push(id); bump('items'); return 'added'; },
-    async saveCategories(list){ const {error}=await sb.from('settings').upsert({key:'categories',value:{list:normCats(list)},updated_at:new Date().toISOString()}); if(error) fail(error); bump('settings'); },
+    // list 말고 settings 에 들어 있던 다른 키(v 등)를 그대로 실어 보낸다. 통째로 덮으면 그것들이 사라진다.
+    // 한 번도 못 읽었을 때의 기본값이 {v:2} 인 이유: schema.sql 의 이관 (2)가 v 를 보고 "아직 이관 전인가" 를
+    // 판정한다. v 없이 저장해 두면 다음에 schema.sql 을 돌릴 때 유령 분야 복구 단계가 한 번 더 돈다.
+    async saveCategories(list){ const {error}=await sb.from('settings').upsert({key:'categories',value:{...(D.catsRaw||{v:2}),list:normCats(list)},updated_at:new Date().toISOString()}); if(error) fail(error);
+      // 미루지 않고 바로 다시 읽는다. 새 분야의 id 는 서버가 발급하므로 부른 쪽이 그것을 알아야 한다.
+      await load('settings'); return D.cats.slice(); },
     // 주 관리자로 지정할 사람 목록. 운영자만 부를 수 있다 (profiles 정책이 운영자에게만 전체 조회를 허용).
     // 닉네임만 돌려준다. 이메일 등 계정 정보는 화면에 올리지 않는다.
     async people(){
@@ -771,9 +806,9 @@ function SupabaseStore(){
 
 /* 예시 데이터: 설정이 비어 있는 미리보기 모드에서만 표시된다. */
 const EXAMPLES=[
-  {id:'ex1',type:'link',title:'Excalidraw',url:'https://excalidraw.com',body:'손그림 느낌의 다이어그램 도구. 회의 중 구조 설명할 때 빠름.',category:'개발·도구',sub:'디자인·문서',tags:['다이어그램','무료'],votes:0,createdAt:'2026-09-01T09:00:00Z',by:'예시'},
-  {id:'ex2',type:'snippet',title:'멈춘 도커 컨테이너 한 번에 정리',lang:'bash',body:'docker container prune -f\ndocker image prune -a -f --filter "until=168h"',category:'개발·도구',sub:'CLI·스크립트',tags:['docker','정리'],votes:0,createdAt:'2026-09-02T09:00:00Z',by:'예시'},
-  {id:'ex3',type:'note',title:'주 3회 근력 루틴',body:'월: 하체 (스쿼트 5x5, 런지 3x10)\n수: 상체 밀기 (벤치 5x5, 숄더프레스 3x8)\n금: 상체 당기기 (데드리프트 5x5, 로우 3x10)',category:'생활·건강·취미',sub:'운동',tags:['운동','루틴'],votes:0,createdAt:'2026-09-03T09:00:00Z',by:'예시'},
+  {id:'ex1',type:'link',title:'Excalidraw',url:'https://excalidraw.com',body:'손그림 느낌의 다이어그램 도구. 회의 중 구조 설명할 때 빠름.',category:'개발·도구',categoryId:'dev',sub:'디자인·문서',tags:['다이어그램','무료'],votes:0,createdAt:'2026-09-01T09:00:00Z',by:'예시'},
+  {id:'ex2',type:'snippet',title:'멈춘 도커 컨테이너 한 번에 정리',lang:'bash',body:'docker container prune -f\ndocker image prune -a -f --filter "until=168h"',category:'개발·도구',categoryId:'dev',sub:'CLI·스크립트',tags:['docker','정리'],votes:0,createdAt:'2026-09-02T09:00:00Z',by:'예시'},
+  {id:'ex3',type:'note',title:'주 3회 근력 루틴',body:'월: 하체 (스쿼트 5x5, 런지 3x10)\n수: 상체 밀기 (벤치 5x5, 숄더프레스 3x8)\n금: 상체 당기기 (데드리프트 5x5, 로우 3x10)',category:'생활·건강·취미',categoryId:'life',sub:'운동',tags:['운동','루틴'],votes:0,createdAt:'2026-09-03T09:00:00Z',by:'예시'},
 ];
 
 /* ================================================================
@@ -781,7 +816,7 @@ const EXAMPLES=[
    ================================================================ */
 const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'자료'}};
 const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'부적절한 내용',dup:'중복'};
-const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCats:[]};
+const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',catId:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCatIds:[]};
 const ME={id:null,name:'',email:''};
 let store=null;
 /* AI 가 제안한 자료를 잠시 들고 있는다. 한 번 받는 데 하루 사용량 15회분이 드는데
@@ -805,27 +840,105 @@ const rel=iso=>{ const d=(Date.now()-new Date(iso).getTime())/1000; if(isNaN(d))
 let toastT; function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2800); }
 const loggedIn=()=>!!ME.id;
 /* 분야 주 관리자: settings 의 owner 가 나인 분야들 */
-const myCats=()=>ME.id?S.cats.filter(c=>c.owner===ME.id).map(c=>c.name):[];
-const managesCat=n=>!!n&&myCats().includes(n);
+const myCats=()=>ME.id?S.cats.filter(c=>c.owner===ME.id).map(c=>c.id):[];
+const managesCatId=id=>!!id&&myCats().includes(id);
 const isMod=()=>S.admin||myCats().length>0;                 // 검토함을 볼 수 있는 사람
-const catOwner=n=>S.cats.find(c=>c.name===n);
-/* 수정·삭제 가능? 내 것이거나, 운영자이거나, 그 자료가 속한 분야의 주 관리자 */
-const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id)||managesCat(o.category);
+/* 분야를 잇는 키는 id 다. NOCAT 은 분야를 잃었거나 아직 못 이은 자료를 모으는 자리.
+   서버가 발급하는 id 는 dev·life·ai·humor 또는 'c'+16진수라 이 이름과 겹칠 수 없다. */
+const NOCAT='__none';
+/* 빈 id 로는 아무것도 찾지 못하게 막는다. id 가 아직 없는 분야가 목록에 섞이면
+   find(c=>c.id==='') 가 "첫 분야" 를 돌려주어, 한 분야만 고쳤다고 믿은 조작이 엉뚱한 분야에 적용된다. */
+const catOf=id=>id?S.cats.find(c=>c.id===id):undefined;
+/* 서버가 분야 id 를 다 발급했는가. 하나라도 비어 있으면 개명·담당자 지정이 이름에 기대게 되어
+   저장 한 번에 담당자 지정이 사라진다. 그런 상태에서는 편집 창을 아예 열지 않는다. */
+const catsReady=()=>S.cats.length>0&&S.cats.every(c=>c.id);
+const CATS_NOT_READY='분야 목록에 id 가 없는 줄이 있습니다. 서버 이관(schema.sql)을 먼저 끝내 주세요';
+const catName=id=>!id?'':id===NOCAT?'분야 없음'
+  :((catOf(id)||{}).name||(S.items.find(i=>i.categoryId===id)||{}).category||'');
+/* 수정·삭제 가능? 내 것이거나, 운영자이거나, 그 자료가 속한 분야의 주 관리자.
+   판단 근거를 이름으로 두면 RLS 와 갈라진다 — 버튼은 보이는데 누르면 42501 이 난다. */
+const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id)||managesCatId(o.categoryId);
 const myReported=()=>new Set(S.reports.filter(r=>r.reporterId===ME.id).map(r=>r.itemId));
 /* AI: 운영자용 정리 도구는 공유 저장소 + 운영자일 때만, 분류 제안 버튼은 공유 저장소 + 로그인일 때 */
 const aiOn=()=>AI_ON&&!!store&&store.kind==='db';
 const aiReady=()=>aiOn()&&S.admin;
 const topTagsLocal=(n=40)=>{ const c={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>c[t]=(c[t]||0)+1)); return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n).map(([t])=>t); };
 const catsToText=list=>list.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
-// 분야 편집 텍스트 → 목록. 화면에 없는 정보(주 관리자)는 기존 값에서 이름으로 찾아 이어 붙인다.
-// 이걸 안 하면 분야 편집이나 AI 구조 저장 한 번에 담당자 지정이 전부 지워진다.
-const parseCatText=text=>text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
-  const [n,sb]=l.split(/[:：]/); const name=n.trim();
-  const out={name,subs:(sb||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean)};
-  const prev=S.cats.find(c=>c.name===name);
-  if(prev&&prev.owner){ out.owner=prev.owner; out.ownerName=prev.ownerName; }
-  return out;
-}).filter(c=>c.name);
+
+/* ---------- 분야 행 편집기 ----------
+   분야 편집과 AI 분야 구조 개편안이 같은 부품을 쓴다.
+   행마다 분야 id 를 data-cid 에 숨겨 들고 있다. 이름 칸을 고치는 것이 곧 개명이고,
+   id 가 그대로라서 자료·담당자·권한이 따라온다. id 가 빈 행은 새 분야이고 서버가 id 를 발급한다.
+   텍스트로 폈다 접는 옛 방식으로는 개명이 아예 안 됐다 — 이름이 정체성이라 새 분야가 되어 버렸고,
+   옛 분야는 목록에서 사라진 것으로 보여 서버가 저장을 통째로 거부했다. */
+const catCounts=()=>{ const n={}; S.items.forEach(it=>{ if(it.categoryId) n[it.categoryId]=(n[it.categoryId]||0)+1; }); return n; };
+function catRowHTML(c,cnt){
+  const n=cnt[c.id]||0, prev=c.id?catOf(c.id):null;
+  const owner=c.owner||(prev&&prev.owner), ownerName=c.ownerName||(prev&&prev.ownerName)||'';
+  // renamedFrom 은 AI 구조 개편안만 실어 준다. 개명은 자료가 통째로 따라오는 변경이라
+  // 저장 버튼을 누르기 전에 무엇이 어디로 가는지 눈에 보여야 한다. 값이 없으면 아무것도 그리지 않는다.
+  const rf=String(c.renamedFrom||'').trim();
+  return `<div class="ai-card" data-cr-row data-cid="${esc(c.id||'')}">
+    <div class="two">
+      <label class="fld">이름<input data-cr-name value="${esc(c.name)}" maxlength="60" placeholder="분야 이름"></label>
+      <label class="fld">하위분야 (쉼표로 나눔)<input data-cr-subs value="${esc((c.subs||[]).join(', '))}" placeholder="예: 웹, CLI·스크립트"></label>
+    </div>
+    ${rf&&rf!==c.name?`<div class="hint ai-new" style="margin-top:2px"><b>개명:</b> ${esc(rf)} → <b>${esc(c.name)}</b> · 자료 ${n}개가 따라갑니다</div>`:''}
+    <div class="ai-card-m" style="cursor:default">
+      ${c.id?`<span class="chip">자료 ${n}개</span>`:'<span class="ai-tag">새 분야</span>'}
+      ${owner?`<span class="chip">담당 ${esc(ownerName||'이름 없음')}</span>`:''}
+      <button type="button" class="btn ghost small" data-cr-del style="margin-left:auto"${n?' disabled title="자료가 들어 있어 지울 수 없습니다"':''}>지우기</button>
+    </div>
+  </div>`;
+}
+function catRowsHTML(list,cnt){
+  return `<div class="ai-wrap" data-cr-list style="max-height:46vh">${list.map(c=>catRowHTML(c,cnt)).join('')}</div>
+    <div class="ai-row" style="margin-top:8px"><button type="button" class="btn small" data-cr-add>＋ 분야 추가</button></div>`;
+}
+function bindCatRows(root,cnt){
+  root.addEventListener('click',e=>{
+    if(e.target.closest('[data-cr-add]')){
+      const box=root.querySelector('[data-cr-list]');
+      box.insertAdjacentHTML('beforeend',catRowHTML({id:'',name:'',subs:[]},cnt));
+      box.scrollTop=box.scrollHeight; box.lastElementChild.querySelector('[data-cr-name]').focus(); return;
+    }
+    const del=e.target.closest('[data-cr-del]'); if(del) del.closest('[data-cr-row]').remove();
+  });
+}
+function readCatRows(root){
+  return [...root.querySelectorAll('[data-cr-row]')].map(r=>{
+    const id=r.dataset.cid||'', name=r.querySelector('[data-cr-name]').value.trim();
+    // 먼저 id 로 찾고, 못 찾으면 이름으로라도 찾는다. 분야에 id 가 없는 상태(옛 스키마)에서는
+    // id 로만 이으면 prev 가 늘 null 이라 담당자 지정이 저장 한 번에 통째로 사라진다.
+    // 이름 대비책은 **id 가 없는 분야에만** 건다. 이걸 열어 두면 "A 를 개명하면서 A 의 옛 이름으로
+    // 새 분야 만들기" 를 할 때 새 행이 옛 A 의 담당자를 그대로 물려받아, 운영자가 지정한 적 없는
+    // 사람이 그 분야의 주 관리자가 된다 (권한 확대).
+    const prev=(id?catOf(id):null)||S.cats.find(c=>!c.id&&c.name===name)||null;
+    const o={id,name,
+      subs:[...new Set(r.querySelector('[data-cr-subs]').value.split(/[,，]/).map(x=>x.trim()).filter(Boolean))]};
+    // 담당자는 이름이 아니라 id 로 이어 붙이는 것이 원칙이다. 이름으로 이으면 개명 한 번에 지정이 사라진다.
+    if(prev&&prev.owner){ o.owner=prev.owner; o.ownerName=prev.ownerName; }
+    return o;
+    // 이름이 빈 줄을 여기서 버리면 안 된다. 기존 분야의 이름을 지우고 저장하는 것이
+    // 확인 절차 없는 "분야 삭제" 가 되어, 담당자 지정과 하위분야까지 말없이 사라진다.
+    // 버리는 것은 아직 아무것도 아닌 줄(새로 추가하고 이름을 안 쓴 줄)뿐이다.
+  }).filter(c=>c.id||c.name);
+}
+// 서버가 거부할 저장을 미리 걸러 준다. 여기서라야 무엇이 문제인지 정확히 말해 줄 수 있다.
+function catRowsError(list){
+  if(!list.length) return '분야가 하나는 있어야 합니다.';
+  if(list.some(c=>c.id&&!c.name)) return '이름이 비어 있는 분야가 있습니다. 이름을 적거나 "지우기" 를 눌러 주세요.';
+  const names=list.map(c=>c.name), dup=names.find((n,i)=>names.indexOf(n)!==i);
+  if(dup) return `"${dup}" 라는 이름이 두 번 있습니다. 이름을 다르게 해 주세요.`;
+  const ids=list.map(c=>c.id).filter(Boolean), dupId=ids.find((v,i)=>ids.indexOf(v)!==i);
+  if(dupId) return `한 분야가 두 줄에 들어가 있습니다 ("${(catOf(dupId)||{}).name||dupId}"). 한 분야를 둘로 나누려면 한쪽 줄을 지우고 저장한 뒤, ＋ 분야 추가로 새로 만들어 주세요.`;
+  // 개수는 저장 직전에 다시 센다. 창을 열어 둔 사이 남이 자료를 올렸거나 옮겼을 수 있고,
+  // 낡은 수로 판단하면 서버가 상황과 맞지 않는 문구로 거절해 빠져나갈 길이 없어진다.
+  const cnt=catCounts();
+  const stuck=S.cats.find(c=>c.id&&cnt[c.id]&&!list.some(x=>x.id===c.id));
+  if(stuck) return `"${stuck.name}" 에 자료 ${cnt[stuck.id]}개가 들어 있어 지울 수 없습니다. 먼저 그 자료를 다른 분야로 옮겨 주세요.`;
+  return '';
+}
 /* 쓰기 전에 로그인·이름 확인 */
 function ensureName(){ return new Promise(res=>{ if(!loggedIn()){ openLogin(); return res(false); } if(ME.name) return res(true); openNameForm(ok=>res(ok)); }); }
 
@@ -840,7 +953,10 @@ function parseQ(q){
   });
   return out;
 }
-const hay=it=>[it.title,it.url,it.body,it.lang,it.category,it.sub,(it.tags||[]).join(' '),it.by].join(' ').toLowerCase();
+/* 분야 이름은 id 에서 끌어낸 것을 먼저 쓴다. it.category 는 서버가 유지하는 표시용 사본이라,
+   개명 트랜잭션과 거의 동시에 들어온 자료 하나가 옛 이름을 단 채로 굳어 있을 수 있다. */
+const catOfItem=it=>catName(it.categoryId)||it.category||'';
+const hay=it=>[it.title,it.url,it.body,it.lang,catOfItem(it),it.sub,(it.tags||[]).join(' '),it.by].join(' ').toLowerCase();
 const curCol=()=>S.col?S.cols.find(c=>c.id===S.col):null;
 function filtered(){
   const p=parseQ(S.q); const col=curCol();
@@ -848,11 +964,11 @@ function filtered(){
     if(col&&!(col.itemIds||[]).includes(it.id)) return false;
     if(S.mine&&it.ownerId!==ME.id) return false;
     if(S.type!=='all'&&it.type!==S.type) return false;
-    if(S.cat!=='all'&&it.category!==S.cat) return false;
+    if(S.catId!=='all'&&(S.catId===NOCAT?!!it.categoryId:it.categoryId!==S.catId)) return false;
     if(S.sub&&it.sub!==S.sub) return false;
     if(S.tag&&!(it.tags||[]).includes(S.tag)) return false;
     if(p.type&&!it.type.startsWith(p.type)) return false;
-    if(p.cat&&!((it.category||'')+' '+(it.sub||'')).toLowerCase().includes(p.cat)) return false;
+    if(p.cat&&!((catOfItem(it)||'')+' '+(it.sub||'')).toLowerCase().includes(p.cat)) return false;
     if(p.tags.length&&!p.tags.every(t=>(it.tags||[]).some(x=>x.toLowerCase().includes(t)))) return false;
     if(p.words.length){ const h=hay(it); if(!p.words.every(w=>h.includes(w))) return false; }
     return true;
@@ -883,7 +999,7 @@ function render(){
   const el=$('#list');
   if(!list.length){
     if(DB_ERR){ el.innerHTML=`<div class="empty"><b>자료를 불러오지 못했습니다</b>${esc(DB_ERR)}<br>새로고침해 보시고, 계속되면 운영자에게 알려 주세요.</div>`; return; }
-    const anyFilter=S.q||S.type!=='all'||S.cat!=='all'||S.tag||S.col||S.mine;
+    const anyFilter=S.q||S.type!=='all'||S.catId!=='all'||S.tag||S.col||S.mine;
     el.innerHTML=`<div class="empty"><b>${anyFilter?'검색 결과가 없습니다':'아직 항목이 없습니다'}</b>${anyFilter?'다른 단어로 찾거나 필터를 지워 보세요. <code>type:</code> <code>cat:</code> <code>#태그</code> 문법을 쓸 수 있습니다.':'오른쪽 위 <code>＋ 추가</code> 로 첫 자료를 올려 보세요.'}</div>`;
     return;
   }
@@ -901,7 +1017,7 @@ function row(it,i){
     <div class="row-main">
       <div class="row-title">${hl(it.title||'(제목 없음)')}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}${it.lang?`<span class="host">${esc(it.lang)}</span>`:''}</div>
       ${sub?`<div class="row-sub">${hl(sub)}</div>`:''}
-      <div class="row-meta">${it.category?`<span class="chip cat">${esc(it.category)}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
+      <div class="row-meta">${catOfItem(it)?`<span class="chip cat">${esc(catOfItem(it))}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
     </div>
     <div class="row-side">
       <button class="vote${voted?' done':''}" data-vote="${esc(it.id)}" title="추천">▲ <span class="num">${it.votes||0}</span></button>
@@ -945,18 +1061,27 @@ function renderRail(){
   $('#typeList').innerHTML=[['all','전체','line2'],...Object.entries(TYPES).map(([k,v])=>[k,v.n,k==='snippet'?'code':k])].map(([k,n,c])=>
     `<button class="f${S.type===k?' on':''}" data-type="${k}"><span class="lbl"><i class="dot" style="background:var(--${c})"></i>${n}</span><span class="cnt">${cnt[k]||0}</span></button>`).join('')
     +(loggedIn()?`<button class="f${S.mine?' on':''}" data-mine="1" style="margin-top:4px;border-top:1px solid var(--line);border-radius:0 0 6px 6px"><span class="lbl">내 글</span><span class="cnt">${mineN}</span></button>`:'');
-  const cc={},sc={}; S.items.forEach(it=>{ if(it.category){ cc[it.category]=(cc[it.category]||0)+1; if(it.sub) sc[it.category+'/'+it.sub]=(sc[it.category+'/'+it.sub]||0)+1; } });
-  const cats=S.cats.slice(); Object.keys(cc).forEach(n=>{ if(!cats.some(c=>c.name===n)) cats.push({name:n,subs:[]}) });
-  let h=`<button class="f${S.cat==='all'?' on':''}" data-cat="all"><span class="lbl">전체</span><span class="cnt">${S.items.length}</span></button>`;
+  // 분야별 개수는 id 로 센다. 이름을 키로 쓰면 개명 도중 같은 분야가 둘로 갈라져 보인다.
+  const cc={},sc={};
+  S.items.forEach(it=>{ const k=it.categoryId||NOCAT; cc[k]=(cc[k]||0)+1;
+    if(it.sub){ (sc[k]||(sc[k]={}))[it.sub]=(sc[k][it.sub]||0)+1; } });
+  const cats=S.cats.slice();
+  // 목록에 없는 id 를 쓰는 자료가 있으면 그 분야를 임시로 끼워 넣는다. 조용히 숨기지 않는다.
+  S.items.forEach(it=>{ if(it.categoryId&&!cats.some(c=>c.id===it.categoryId))
+    cats.push({id:it.categoryId,name:it.category||'(이름 없는 분야)',subs:[]}); });
+  // 분야를 못 이은 자료는 여기에 모인다. 이 자리가 없으면 화면에서 통째로 사라진다.
+  if(cc[NOCAT]) cats.push({id:NOCAT,name:'분야 없음',subs:[]});
+  let h=`<button class="f${S.catId==='all'?' on':''}" data-cat="all"><span class="lbl">전체</span><span class="cnt">${S.items.length}</span></button>`;
   cats.forEach(c=>{
-    const on=S.cat===c.name, open=S.openCats.includes(c.name);   // 필터 여부와 펼침 여부는 별개다
-    h+=`<button class="f${on&&!S.sub?' on':''}" data-cat="${esc(c.name)}"><span class="lbl">${open?'▾':'▸'}&nbsp;${esc(c.name)}</span><span class="cnt">${cc[c.name]||0}</span></button>`;
+    const on=S.catId===c.id, open=S.openCatIds.includes(c.id);   // 필터 여부와 펼침 여부는 별개다
+    h+=`<button class="f${on&&!S.sub?' on':''}" data-cat="${esc(c.id)}"><span class="lbl">${open?'▾':'▸'}&nbsp;${esc(c.name)}</span><span class="cnt">${cc[c.id]||0}</span></button>`;
     if(open){
       // 담당자는 펼친 분야 바로 아래에 붙인다. 목록 맨 아래에 한 줄만 두면 어느 분야 것인지 알 수 없다.
       const mine=c.owner===ME.id, who=c.owner?(mine?(ME.name||c.ownerName||'이름 없음'):(c.ownerName||'이름 없음')):'';
       h+=`<div class="owner">담당 <b>${c.owner?esc(who):'운영자'}</b>${mine?' (나)':''}</div>`;
-      const subs=c.subs.slice(); Object.keys(sc).forEach(k=>{ const [cn,sn]=k.split('/'); if(cn===c.name&&!subs.includes(sn)) subs.push(sn) });
-      subs.forEach(s=>{ h+=`<button class="f sub${S.cat===c.name&&S.sub===s?' on':''}" data-sub="${esc(s)}" data-parent="${esc(c.name)}"><span class="lbl">${esc(s)}</span><span class="cnt">${sc[c.name+'/'+s]||0}</span></button>` });
+      const seen=sc[c.id]||{}, subs=c.subs.slice();
+      Object.keys(seen).forEach(sn=>{ if(!subs.includes(sn)) subs.push(sn) });
+      subs.forEach(s=>{ h+=`<button class="f sub${on&&S.sub===s?' on':''}" data-sub="${esc(s)}" data-parent="${esc(c.id)}"><span class="lbl">${esc(s)}</span><span class="cnt">${seen[s]||0}</span></button>` });
       if(!subs.length) h+=`<span class="hint" style="padding:2px 24px">하위분야 없음</span>`;
     }
   });
@@ -964,7 +1089,7 @@ function renderRail(){
   $('#catEdit').hidden=!S.admin; $('#catAi').hidden=!aiReady();
   // 접힌 상태에서도 지금 무엇으로 걸러 보고 있는지 제목줄에 보인다
   $('#typeCur').textContent=S.type==='all'?'':(TYPES[S.type]||{}).n||'';
-  $('#catCur').textContent=S.cat==='all'?'':S.cat+(S.sub?' › '+S.sub:'');
+  $('#catCur').textContent=S.catId==='all'?'':catName(S.catId)+(S.sub?' › '+S.sub:'');
   const cols=S.cols.slice().sort((a,b)=>(b.itemIds||[]).length-(a.itemIds||[]).length);
   $('#colNum').textContent=cols.length?cols.length:'';
   $('#colList').innerHTML=cols.length?cols.map(c=>`<button class="f${S.col===c.id?' on':''}" data-col="${esc(c.id)}"><span class="lbl">▤&nbsp;${esc(c.title)}</span><span class="cnt">${(c.itemIds||[]).length}</span></button>`).join(''):'<span class="hint">모음은 주제별로 항목을 묶는 큐레이션입니다. 첫 모음을 만들어 보세요.</span>';
@@ -988,7 +1113,7 @@ function renderReview(){
   if(!ids.length){ el.innerHTML=`<div class="rv"><div class="empty"><b>검토할 신고가 없습니다</b>신고가 들어오면 여기에 모입니다.</div></div><p><button class="btn small ghost" data-review-close="1">목록으로</button></p>`; return; }
   el.innerHTML=`<div class="bar"><div class="status"><b>${ids.length}</b>개 항목에 신고 ${S.reports.length}건</div><button class="btn small ghost" data-review-close="1">목록으로</button></div><div class="rv">`+ids.map(id=>{
     const it=S.items.find(x=>x.id===id); const rs=g[id];
-    return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(it.category||'')}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
+    return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(catOfItem(it))}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
       <ul>${rs.map(r=>`<li>${esc(REASONS[r.reason]||r.reason)}${r.note?' — '+esc(r.note):''} <span class="hint">(${esc(r.by||'익명')}, ${rel(r.createdAt)})</span></li>`).join('')}</ul></div>
       <div class="acts">${it?`<button class="btn small" data-open="${esc(id)}">보기</button><button class="btn small danger" data-rvdel="${esc(id)}">항목 삭제</button>`:''}<button class="btn small ghost" data-rvclear="${esc(id)}">신고 닫기</button></div></div>`;
   }).join('')+'</div>';
@@ -1004,21 +1129,21 @@ document.querySelector('.rail').addEventListener('click',e=>{
   if(t) S.type=t.dataset.type;
   if(c){
     const n=c.dataset.cat;
-    if(n==='all'){ S.cat='all'; S.sub=null; S.openCats=[]; }
+    if(n==='all'){ S.catId='all'; S.sub=null; S.openCatIds=[]; }
     else{
-      const wasOpen=S.openCats.includes(n);
+      const wasOpen=S.openCatIds.includes(n);
       // 다시 누르면 접고 필터도 푼다. 다른 분야의 펼침은 건드리지 않는다.
-      S.openCats=wasOpen?S.openCats.filter(x=>x!==n):[...S.openCats,n];
-      if(wasOpen&&S.cat===n){ S.cat='all'; S.sub=null; }
-      else{ S.cat=n; S.sub=null; }
-      LS.set('toolbox.openCats',S.openCats);
+      S.openCatIds=wasOpen?S.openCatIds.filter(x=>x!==n):[...S.openCatIds,n];
+      if(wasOpen&&S.catId===n){ S.catId='all'; S.sub=null; }
+      else{ S.catId=n; S.sub=null; }
+      LS.set('toolbox.openCatIds',S.openCatIds);
     }
   }
   if(s){
-    const par=s.dataset.parent||S.cat;
+    const par=s.dataset.parent||S.catId;
     // 이미 그 분야의 같은 하위분야가 켜져 있으면 끄고, 아니면 그 분야까지 함께 켠다
-    if(S.cat===par&&S.sub===s.dataset.sub) S.sub=null;
-    else{ S.cat=par; S.sub=s.dataset.sub; if(!S.openCats.includes(par)){ S.openCats=[...S.openCats,par]; LS.set('toolbox.openCats',S.openCats); } }
+    if(S.catId===par&&S.sub===s.dataset.sub) S.sub=null;
+    else{ S.catId=par; S.sub=s.dataset.sub; if(!S.openCatIds.includes(par)){ S.openCatIds=[...S.openCatIds,par]; LS.set('toolbox.openCatIds',S.openCatIds); } }
   }
   if(g) S.tag=S.tag===g.dataset.tag?null:g.dataset.tag;
   if(m) S.mine=!S.mine;
@@ -1030,7 +1155,7 @@ document.querySelectorAll('.sec summary .acts button').forEach(b=>b.addEventList
 $('#catEdit').addEventListener('click',openCatEditor);
 $('#catAi').addEventListener('click',openAiOrganize);
 $('#colNew').addEventListener('click',()=>openColForm(null));
-$('#home').addEventListener('click',e=>{ e.preventDefault(); Object.assign(S,{q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'}); $('#q').value=''; render(); });
+$('#home').addEventListener('click',e=>{ e.preventDefault(); Object.assign(S,{q:'',type:'all',catId:'all',sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'}); $('#q').value=''; render(); });
 $('#colHead').addEventListener('click',e=>{
   const ed=e.target.closest('[data-coledit]'); if(ed) return openColForm(S.cols.find(c=>c.id===ed.dataset.coledit));
   const dl=e.target.closest('[data-coldel]'); if(dl) return delCol(dl.dataset.coldel);
@@ -1038,7 +1163,7 @@ $('#colHead').addEventListener('click',e=>{
 });
 $('#review').addEventListener('click',async e=>{
   if(e.target.closest('[data-review-close]')){ S.view='list'; render(); return; }
-  const o=e.target.closest('[data-open]'); if(o){ S.view='list'; S.sel=o.dataset.open; S.q=''; $('#q').value=''; Object.assign(S,{type:'all',cat:'all',sub:null,tag:null,col:null,mine:false}); render(); return; }
+  const o=e.target.closest('[data-open]'); if(o){ S.view='list'; S.sel=o.dataset.open; S.q=''; $('#q').value=''; Object.assign(S,{type:'all',catId:'all',sub:null,tag:null,col:null,mine:false}); render(); return; }
   const d=e.target.closest('[data-rvdel]'); if(d){ const it=S.items.find(x=>x.id===d.dataset.rvdel); if(it&&await del(it.id,true)) await clearReports(it.id); return; }
   const c=e.target.closest('[data-rvclear]'); if(c){ await clearReports(c.dataset.rvclear); toast('신고를 닫았습니다'); }
 });
@@ -1219,8 +1344,9 @@ function openNameForm(cb){
 async function openForm(it){
   if(!await ensureName()) return;
   const edit=!!it; if(edit&&!canEdit(it)){ toast('올린 사람과 운영자만 수정할 수 있습니다'); return; }
-  const d=it||{type:'link',title:'',url:'',body:'',lang:'',category:S.cat!=='all'?S.cat:(S.cats[0]||{}).name||'',sub:S.sub||'',tags:[]};
-  const catOpts=S.cats.map(c=>c.name);
+  // 기본 분야는 지금 보고 있는 분야. '분야 없음' 자리는 고를 값이 아니므로 첫 분야로 떨어뜨린다.
+  const preCat=(S.catId!=='all'&&S.catId!==NOCAT&&catOf(S.catId))?S.catId:((S.cats[0]||{}).id||'');
+  const d=it||{type:'link',title:'',url:'',body:'',lang:'',categoryId:preCat,category:catName(preCat),sub:S.sub||'',tags:[]};
   modal(`${mh(edit?'항목 수정':'새 항목')}<form id="form" autocomplete="off"><div class="modal-b">
       <div class="types" id="types">${Object.entries(TYPES).map(([k,v])=>`<button type="button" data-t="${k}" class="${d.type===k?'on':''}"><span class="k" style="color:var(--${k==='snippet'?'code':k})">${v.k}</span><small>${v.n}</small></button>`).join('')}</div>
       <label class="fld" id="fUrl">주소 (URL)<input name="url" type="url" placeholder="https://" value="${esc(d.url)}"></label>
@@ -1228,14 +1354,14 @@ async function openForm(it){
       <label class="fld" id="fLang">언어 / 형식<input name="lang" placeholder="bash, python, json, pdf ..." value="${esc(d.lang||'')}"></label>
       <label class="fld" id="fBody"><span id="bodyLabel">설명</span><textarea name="body">${esc(d.body)}</textarea></label>
       <div class="two">
-        <label class="fld">분야<select name="category">${catOpts.map(c=>`<option ${c===d.category?'selected':''}>${esc(c)}</option>`).join('')}${d.category&&!catOpts.includes(d.category)?`<option selected>${esc(d.category)}</option>`:''}</select></label>
+        <label class="fld">분야<select name="category">${!d.categoryId?`<option value="">분야 없음${d.category?' (원래: '+esc(d.category)+')':''}</option>`:''}${S.cats.map(c=>`<option value="${esc(c.id)}" ${c.id===d.categoryId?'selected':''}>${esc(c.name)}</option>`).join('')}${d.categoryId&&!S.cats.some(c=>c.id===d.categoryId)?`<option value="${esc(d.categoryId)}" selected>${esc(d.category||'(목록에 없는 분야)')}</option>`:''}</select></label>
         <label class="fld">하위분야<input name="sub" list="subOpts" value="${esc(d.sub||'')}" placeholder="새 이름을 쓰면 만들어집니다"><datalist id="subOpts"></datalist></label>
       </div>
       <label class="fld">태그<input name="tags" placeholder="쉼표로 구분: docker, 정리" value="${esc((d.tags||[]).join(', '))}"></label>
       ${aiOn()?`<div class="ai-row"><button type="button" class="btn small" id="aiBtn">✦ AI 분류 제안</button><span class="hint" id="aiMsg">제목이나 주소를 넣고 누르면 분야·하위분야·태그를 채워 줍니다. 저장 전에 고칠 수 있습니다.</span></div>`:''}
     </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">${edit?'저장':'추가'}</button></div></form>`);
   const form=$('#form'); let type=d.type;
-  function subOpts(){ const c=S.cats.find(x=>x.name===form.category.value); const set=new Set(c?c.subs:[]); S.items.forEach(i=>{ if(i.category===form.category.value&&i.sub) set.add(i.sub) }); $('#subOpts').innerHTML=[...set].map(s=>`<option value="${esc(s)}">`).join(''); }
+  function subOpts(){ const cid=form.category.value, c=catOf(cid); const set=new Set(c?c.subs:[]); S.items.forEach(i=>{ if(cid&&i.categoryId===cid&&i.sub) set.add(i.sub) }); $('#subOpts').innerHTML=[...set].map(s=>`<option value="${esc(s)}">`).join(''); }
   function applyType(){
     $('#types').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===type));
     const noUrl=type==='note'||type==='snippet';
@@ -1253,12 +1379,14 @@ async function openForm(it){
   form.url.addEventListener('blur',()=>{ if(!form.title.value&&form.url.value) form.title.value=host(form.url.value); });
   const aiBtn=$('#aiBtn'); if(aiBtn) aiBtn.addEventListener('click',async()=>{
     const f=form, msg=$('#aiMsg');
-    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':f.url.value.trim(),lang:f.lang.value.trim(),body:f.body.value.trim(),category:f.category.value,sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
+    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':f.url.value.trim(),lang:f.lang.value.trim(),body:f.body.value.trim(),categoryId:f.category.value,category:catName(f.category.value),sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
     if(!(item.title||item.url||item.body)){ msg.textContent='제목, 주소, 내용 중 하나는 먼저 적어 주세요.'; return; }
     aiBtn.disabled=true; msg.textContent='AI 가 살펴보는 중…';
     try{
       const r=await store.ai('suggest',{item,tagsHint:topTagsLocal()});
-      if(r.category){ if(![...f.category.options].some(o=>o.value===r.category)) f.category.add(new Option(r.category)); f.category.value=r.category; subOpts(); }
+      // 서버는 categoryId 와 이름을 함께 준다. id 를 못 받으면 이름으로 찾아 잇는다.
+      const rid=r.categoryId||((S.cats.find(c=>c.name===r.category)||{}).id||'');
+      if(rid){ if(![...f.category.options].some(o=>o.value===rid)) f.category.add(new Option(r.category||catName(rid),rid)); f.category.value=rid; subOpts(); }
       if(r.sub) f.sub.value=r.sub;
       if(Array.isArray(r.tags)&&r.tags.length) f.tags.value=[...new Set([...item.tags,...r.tags.map(String)])].join(', ');
       if(r.title&&(!item.title||item.title===host(item.url))) f.title.value=r.title;
@@ -1274,7 +1402,11 @@ async function openForm(it){
       url:(type==='note'||type==='snippet')?'':f.url.value.trim(),
       lang:(type==='snippet'||type==='file')?f.lang.value.trim():'',
       body:f.body.value.replace(/\s+$/,''),
-      category:f.category.value.trim(), sub:f.sub.value.trim(),
+      categoryId:f.category.value,
+      // 분야를 못 고른 경우(분야 없음)에는 남아 있던 이름을 지우지 않는다.
+      // 지우면 그 자료가 원래 어느 분야였는지가 DB 에서 사라지고, 나중에 그 분야를 다시 만들어도
+      // 서버의 고아 회수(이름이 같은 자료를 주워 오는 것)가 걸 것이 없어진다. 백업이 없어 복구 불가다.
+      category:f.category.value?catName(f.category.value):(d.category||''), sub:f.sub.value.trim(),
       tags:[...new Set(f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'').trim()).filter(Boolean))],
       votes:d.votes||0, by:edit?(d.by||ME.name):ME.name, ownerId:edit?(d.ownerId||null):ME.id,
       createdAt:d.createdAt||new Date().toISOString(),
@@ -1285,7 +1417,7 @@ async function openForm(it){
     f.querySelector('[type=submit]').disabled=true;
     try{
       await store.put(item);
-      if(S.admin&&item.sub){ const c=S.cats.find(x=>x.name===item.category); if(c&&!c.subs.includes(item.sub)) await store.saveCategories(S.cats.map(x=>x.name===c.name?{...x,subs:[...x.subs,item.sub]}:x)); }
+      if(S.admin&&item.sub&&item.categoryId){ const c=catOf(item.categoryId); if(c&&!c.subs.includes(item.sub)) await store.saveCategories(S.cats.map(x=>x.id===c.id?{...x,subs:[...x.subs,item.sub]}:x)); }
       closeModal(); S.sel=item.id; S.view='list'; toast(edit?'저장했습니다':'추가했습니다'); render();
     }catch(x){
       f.querySelector('[type=submit]').disabled=false;
@@ -1352,21 +1484,31 @@ async function openReportForm(it){
 }
 
 function openCatEditor(){
+  // 분야에 id 가 없으면 개명이 "옛 분야 삭제 + 새 분야 추가" 로 바뀌어 자료·담당자가 떨어져 나간다.
+  // 고칠 수 없는 상태이므로 창을 열지 않는다.
+  if(!catsReady()){ toast(CATS_NOT_READY); return; }
+  const cnt=catCounts();
   modal(`${mh('분야 편집')}<form id="ce"><div class="modal-b">
-    <label class="fld">한 줄에 분야 하나. 콜론 뒤에 하위분야를 쉼표로<textarea name="t" class="code" style="min-height:180px">${esc(catsToText(S.cats))}</textarea></label>
-    <div class="hint">이름을 바꾸면 기존 항목의 분야 이름은 그대로 남습니다. 항목의 분야를 함께 바꾸려면 각 항목을 수정해 주세요.</div>
-  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">저장</button></div></form>`);
+    ${catRowsHTML(S.cats,cnt)}
+    <div class="hint">이름을 바꿔도 그 분야의 자료와 담당자는 그대로 따라옵니다. 자료가 들어 있는 분야는 지울 수 없습니다 — 먼저 그 자료를 다른 분야로 옮겨 주세요.</div>
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">저장</button></div></form>`,'wide');
+  bindCatRows($('#ce'),cnt);
   $('#ce').addEventListener('submit',async e=>{
     e.preventDefault();
-    const list=parseCatText(e.target.t.value);
-    if(!list.length){ $('#err').textContent='분야가 하나는 있어야 합니다.'; return; }
-    try{ await store.saveCategories(list); closeModal(); toast('분야를 저장했습니다'); }catch(x){ $('#err').textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+    const list=readCatRows($('#ce')), bad=catRowsError(list);
+    if(bad){ $('#err').textContent=bad; return; }
+    const btn=e.target.querySelector('[type=submit]'); btn.disabled=true;
+    try{ await store.saveCategories(list); closeModal(); toast('분야를 저장했습니다'); }
+    catch(x){ btn.disabled=false; $('#err').textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
   });
 }
 
 /* ---------- 분야 주 관리자 지정 (운영자) ---------- */
 async function openCatOwners(){
   if(!S.admin){ toast('운영자만 지정할 수 있습니다'); return; }
+  // id 가 없는 분야가 섞여 있으면 어느 분야를 고쳤는지 가려낼 수가 없다.
+  // 그 상태에서 저장하면 담당자 지정이 엉뚱한 분야에 붙거나 통째로 사라진다.
+  if(!catsReady()){ toast(CATS_NOT_READY); return; }
   modal(`${mh('분야 주 관리자')}<div class="modal-b">
     <p class="hint" style="font-size:12.5px;color:var(--muted);margin:0">분야마다 담당자를 정합니다. 담당자는 <b>그 분야의 자료를 수정·삭제하고 신고를 검토</b>할 수 있습니다.
     지정하지 않으면 운영자가 담당합니다. 목록에는 이름을 정한 사람만 나옵니다.</p>
@@ -1376,15 +1518,16 @@ async function openCatOwners(){
   try{ people=await store.people(); }
   catch(x){ $('#coBody').textContent='사람 목록을 불러오지 못했습니다 ('+(x.code||'오류')+')'; return; }
   const opts=id=>`<option value="">운영자 (지정 안 함)</option>`+people.map(p=>`<option value="${esc(p.id)}"${p.id===id?' selected':''}>${esc(p.name)}</option>`).join('');
-  $('#coBody').innerHTML=`<div class="checks" style="max-height:46vh">${S.cats.map((c,i)=>
+  $('#coBody').innerHTML=`<div class="checks" style="max-height:46vh">${S.cats.map(c=>
     `<label style="justify-content:space-between;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</span>
-      <select data-ci="${i}" style="flex:none;max-width:200px;border:1px solid var(--line2);background:var(--bg2);border-radius:7px;padding:6px 8px;font-size:13px;color:var(--text)">${opts(c.owner||'')}</select></label>`).join('')}</div>`;
+      <select data-cid="${esc(c.id)}" style="flex:none;max-width:200px;border:1px solid var(--line2);background:var(--bg2);border-radius:7px;padding:6px 8px;font-size:13px;color:var(--text)">${opts(c.owner||'')}</select></label>`).join('')}</div>`;
   $('#coBody').addEventListener('change',async e=>{
-    const sel=e.target.closest('[data-ci]'); if(!sel) return;
-    const i=+sel.dataset.ci, cat=S.cats[i]; if(!cat) return;
+    const sel=e.target.closest('[data-cid]'); if(!sel) return;
+    const cat=catOf(sel.dataset.cid); if(!cat) return;
     const pid=sel.value, person=people.find(p=>p.id===pid);
-    const next=S.cats.map((c,j)=>{ if(j!==i) return c;
-      const o={name:c.name,subs:c.subs};
+    // 분야 객체를 통째로 들고 간다. 새로 지어 만들면 id 가 사라져 그 저장 한 번에 이관이 풀린다.
+    const next=S.cats.map(c=>{ if(c.id!==cat.id) return c;
+      const o={...c}; delete o.owner; delete o.ownerName;
       if(pid&&person){ o.owner=pid; o.ownerName=person.name; }
       return o; });
     sel.disabled=true;
@@ -1402,15 +1545,15 @@ function openAiOrganize(){
   function scopes(){
     const real=S.items.filter(i=>!i.example);
     const stale=d=>real.filter(i=>!i.checkedAt||new Date(i.checkedAt).getTime()<ago(d));
-    return {empty:real.filter(i=>!i.category), never:real.filter(i=>!i.checkedAt),
+    return {empty:real.filter(i=>!i.categoryId), never:real.filter(i=>!i.checkedAt),
       d30:stale(30), d7:stale(7), list:filtered().filter(i=>!i.example), all:real};
   }
   const sc=scopes();
   // 분야 목록은 설정에 있는 것 + 자료에만 있는 것을 합친다 (왼쪽 사이드바와 같은 규칙)
-  const catCnt={}; sc.all.forEach(i=>{ if(i.category) catCnt[i.category]=(catCnt[i.category]||0)+1; });
-  const expCats=S.cats.map(c=>c.name);
-  Object.keys(catCnt).forEach(n=>{ if(!expCats.includes(n)) expCats.push(n); });
-  const expPre=(S.cat!=='all'&&expCats.includes(S.cat))?S.cat:(expCats[0]||'');
+  const catCnt={}; sc.all.forEach(i=>{ if(i.categoryId) catCnt[i.categoryId]=(catCnt[i.categoryId]||0)+1; });
+  const expCats=S.cats.map(c=>({id:c.id,name:c.name}));
+  sc.all.forEach(i=>{ if(i.categoryId&&!expCats.some(c=>c.id===i.categoryId)) expCats.push({id:i.categoryId,name:i.category||'(이름 없는 분야)'}); });
+  const expPre=(S.catId!=='all'&&expCats.some(c=>c.id===S.catId))?S.catId:((expCats[0]||{}).id||'');
   modal(`${mh('✦ AI 정리')}<div class="modal-b">
     <div class="ai-sec">
       <h3>1. 항목 다시 분류</h3>
@@ -1437,7 +1580,7 @@ function openAiOrganize(){
       <p class="hint">고른 분야에 넣을 자료를 AI 가 제안합니다. 링크는 서버가 실제로 열어 보고, 이미 있는 자료와 겹치는지, 위험한 명령이 섞였는지도 확인합니다. <b>체크한 것만 추가됩니다.</b> 30초에서 1분쯤 걸리고 하루 AI 사용량 15회분을 씁니다(개수를 줄여도 같습니다). 창을 닫아도 요청은 그대로 진행되고, 받은 제안은 잠시 남아 있어 다시 열면 이어서 볼 수 있습니다.</p>
       <div class="ai-fields">
         <label class="fld">분야<select id="expCat">
-          ${expCats.map(n=>`<option value="${esc(n)}" ${n===expPre?'selected':''}>${esc(n)} (${catCnt[n]||0}개)</option>`).join('')}
+          ${expCats.map(c=>`<option value="${esc(c.id)}" ${c.id===expPre?'selected':''}>${esc(c.name)} (${catCnt[c.id]||0}개)</option>`).join('')}
           <option value="__new">＋ 새 분야 직접 입력</option></select></label>
         <label class="fld">주제 힌트 (선택)<input id="expTopic" maxlength="80" placeholder="예: 무료로 쓸 수 있는 것 위주"></label>
         <label class="fld" id="expNewWrap" hidden>새 분야 이름<input id="expNew" maxlength="60" placeholder="예: 글쓰기·기획"></label>
@@ -1497,19 +1640,24 @@ function openAiOrganize(){
     if(!props.length){ out.innerHTML=linkTbl; return; }
     out.innerHTML=`<div class="ai-row"><label class="hint" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="orgAll" checked aria-label="전체 선택"> 전체 선택</label></div>
       <div class="ai-wrap"><table class="ai-tbl"><thead><tr><th>적용</th><th>항목</th><th>지금</th><th>제안</th><th>이유</th></tr></thead><tbody>${props.map((p,i)=>{ const c=byId(p.id);
-      return `<tr><td><input type="checkbox" data-pi="${i}" checked aria-label="적용 대상으로 선택: ${esc(c.title||p.id)}"></td><td>${esc(c.title||p.id)}${lkBadge(p.link)}</td><td class="ai-old">${esc(c.category||'(없음)')}${c.sub?' › '+esc(c.sub):''}<br>${(c.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="ai-new">${esc(p.category)}${p.sub?' › '+esc(p.sub):''}${p.newSub?' <span class="ai-tag">새 하위분야</span>':''}<br>${(p.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="hint">${esc(p.reason||'')}</td></tr>` }).join('')}</tbody></table></div>
+      return `<tr><td><input type="checkbox" data-pi="${i}" checked aria-label="적용 대상으로 선택: ${esc(c.title||p.id)}"></td><td>${esc(c.title||p.id)}${lkBadge(p.link)}</td><td class="ai-old">${esc(catOfItem(c)||'(없음)')}${c.sub?' › '+esc(c.sub):''}<br>${(c.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="ai-new">${esc(p.category)}${p.sub?' › '+esc(p.sub):''}${p.newSub?' <span class="ai-tag">새 하위분야</span>':''}<br>${(p.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="hint">${esc(p.reason||'')}</td></tr>` }).join('')}</tbody></table></div>
       <div class="ai-row"><button type="button" class="btn primary small" id="orgApply">체크한 항목 적용</button><span class="hint" id="orgApplyMsg" aria-live="polite"></span></div>${linkTbl}`;
     $('#orgAll').addEventListener('change',e=>out.querySelectorAll('[data-pi]').forEach(c=>c.checked=e.target.checked));
     $('#orgApply').addEventListener('click',async()=>{
       const sel=[...out.querySelectorAll('[data-pi]:checked')].map(c=>props[+c.dataset.pi]); const m=$('#orgApplyMsg');
       if(!sel.length){ m.textContent='선택한 항목이 없습니다.'; return; }
-      $('#orgApply').disabled=true; let ok=0,fail=0;
-      for(const p of sel){ try{ await store.patch(p.id,{category:p.category,sub:p.sub||'',tags:p.tags||[],updatedAt:new Date().toISOString()}); ok++; }catch(x){ fail++; } m.textContent=`적용 중… ${ok+fail}/${sel.length}`; }
+      $('#orgApply').disabled=true; let ok=0,fail=0,why='';
+      for(const p of sel){
+        if(!p.categoryId&&!p.category){ fail++; if(!why) why='AI 가 분야를 정하지 못한 제안이 있습니다'; continue; }   // 분야를 못 정한 제안. 적용하면 자료가 분야를 잃는다
+        // 실패 이유를 하나는 그대로 보여 준다. "분야 목록이 그 사이에 바뀌었습니다" 처럼
+        // 사용자가 새로 고치면 풀리는 것을 개수만 보고는 알 수 없다.
+        try{ await store.patch(p.id,{...(p.categoryId?{categoryId:p.categoryId}:{}),category:p.category,sub:p.sub||'',tags:p.tags||[],updatedAt:new Date().toISOString()}); ok++; }catch(x){ fail++; if(!why) why=x.message||x.code||''; }
+        m.textContent=`적용 중… ${ok+fail}/${sel.length}`; }
       // 새 하위분야는 분야 목록에도 추가
       const merged=S.cats.map(c=>({...c,subs:c.subs.slice()})); let added=0;
-      sel.forEach(p=>{ if(!p.sub) return; const c=merged.find(x=>x.name===p.category); if(c&&!c.subs.includes(p.sub)){ c.subs.push(p.sub); added++; } });
+      sel.forEach(p=>{ if(!p.sub) return; const c=merged.find(x=>p.categoryId?x.id===p.categoryId:x.name===p.category); if(c&&!c.subs.includes(p.sub)){ c.subs.push(p.sub); added++; } });
       if(added){ try{ await store.saveCategories(merged); }catch(x){ added=0; } }
-      const line=`완료: ${ok}개 적용${fail?`, ${fail}개 실패`:''}${added?`, 하위분야 ${added}개 추가`:''}`;
+      const line=`완료: ${ok}개 적용${fail?`, ${fail}개 실패`:''}${added?`, 하위분야 ${added}개 추가`:''}`+(why?` · ${why}`:'');
       m.textContent=line;
       toast(`${ok}개 항목을 다시 분류했습니다`);
       props=props.filter(p=>!sel.includes(p));
@@ -1524,13 +1672,27 @@ function openAiOrganize(){
     try{
       const r=await store.ai('taxonomy',{}); const list=normCats(r.list);
       if(!list.length) throw new Error('제안을 받지 못했습니다');
+      const cnt=catCounts();
+      // 옛 함수는 id 를 안 준다. 그때는 이름으로라도 이어 붙여야 개명 아닌 변경이 살아남는다.
+      // renamedFrom 은 normCats 가 떨구는 값이라 여기서 다시 붙인다. 화면 안내에만 쓰고 저장하지는 않는다
+      // (readCatRows 는 입력칸만 읽으므로 settings 에는 들어가지 않는다).
+      const wasNamed={}; (Array.isArray(r.list)?r.list:[]).forEach(c=>{ if(c&&c.renamedFrom) wasNamed[String(c.id||c.name||'')]=String(c.renamedFrom); });
+      // 응답에 id 가 하나라도 있으면 새 함수다. 그때는 이름으로 되붙이지 않는다.
+      // 새 함수는 같은 id 를 두 줄에 쓴 응답의 뒷줄을 일부러 id 없이 강등해 "새 분야" 로 만드는데,
+      // 여기서 이름으로 도로 붙이면 그 방어가 통째로 무효가 되어 자료가 남의 이름 밑으로 들어간다.
+      const hasIds=(Array.isArray(r.list)?r.list:[]).some(c=>c&&c.id);
+      const fixed=list.map(c=>{ const o=(c.id||hasIds)?c:{...c,id:((S.cats.find(x=>x.name===c.name)||{}).id||'')};
+        const was=wasNamed[c.id||c.name]; return was?{...o,renamedFrom:was}:o; });
       msg.textContent=`자료 ${r.itemCount||S.items.length}개를 보고 만든 안입니다. 고친 뒤 저장하세요.`;
       out.innerHTML=`${(r.notes||[]).length?`<ul class="ai-notes">${r.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`:''}
-        <div class="two"><label class="fld">지금<textarea class="code" readonly style="min-height:150px">${esc(catsToText(S.cats))}</textarea></label>
-        <label class="fld">제안 (수정 가능)<textarea class="code" id="taxText" style="min-height:150px">${esc(catsToText(list))}</textarea></label></div>
-        <div class="ai-row"><button type="button" class="btn primary small" id="taxSave">이 구조로 저장</button><span class="hint">분야 이름을 바꿔도 기존 항목의 분야 표기는 그대로입니다. 항목까지 옮기려면 위의 "항목 다시 분류"를 쓰세요.</span></div>`;
+        <label class="fld">지금<textarea class="code" readonly style="min-height:100px">${esc(catsToText(S.cats))}</textarea></label>
+        <div class="hint" style="margin:10px 0 5px">제안 (고칠 수 있습니다)</div>
+        <div id="taxRows">${catRowsHTML(fixed,cnt)}</div>
+        <div class="ai-row" style="margin-top:8px"><button type="button" class="btn primary small" id="taxSave">이 구조로 저장</button><span class="hint">이름을 바꿔도 그 분야의 자료와 담당자는 따라옵니다. 자료를 다른 분야로 옮기려면 위의 "항목 다시 분류"를 쓰세요.</span></div>`;
+      bindCatRows($('#taxRows'),cnt);
       $('#taxSave').addEventListener('click',async()=>{
-        const l=parseCatText($('#taxText').value); if(!l.length){ msg.textContent='분야가 하나는 있어야 합니다.'; return; }
+        const l=readCatRows($('#taxRows')), bad=catRowsError(l);
+        if(bad){ msg.textContent=bad; return; }
         try{ await store.saveCategories(l); toast('분야 구조를 저장했습니다'); msg.textContent='저장했습니다. 왼쪽 분야 목록에 반영됩니다.'; }catch(x){ msg.textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
       });
     }catch(x){ msg.textContent='실패: '+(x.message||x.code||'오류'); }
@@ -1590,8 +1752,8 @@ function openAiOrganize(){
       +`<button type="button" class="btn small ghost" id="expDrop">버리기</button>`;
     $('#expResume').addEventListener('click',()=>{
       if(!expCache||!expCache.items.length){ $('#expMsg').textContent='남아 있던 제안이 사라졌습니다. 다시 받아 주세요.'; return; }
-      exp={cat:expCache.cat,isNew:expCache.isNew,items:expCache.items};
-      if([...$('#expCat').options].some(o=>o.value===exp.cat)) $('#expCat').value=exp.cat;
+      exp={cat:expCache.cat,catId:expCache.catId||'',isNew:expCache.isNew,items:expCache.items};
+      if(exp.catId&&[...$('#expCat').options].some(o=>o.value===exp.catId)) $('#expCat').value=exp.catId;
       $('#expMsg').textContent=`제안 ${exp.items.length}개를 이어서 봅니다.`; renderExp();
     });
     $('#expDrop').addEventListener('click',()=>{ expCache=null; $('#expMsg').textContent=''; });
@@ -1602,7 +1764,7 @@ function openAiOrganize(){
     const msg=$('#expMsg'), btn=$('#expBtn');
     btn.disabled=true;
     msg.textContent=`AI 가 "${pend.cat}" 에 넣을 자료를 찾는 중… (30초에서 1분쯤 걸립니다)`;
-    if([...$('#expCat').options].some(o=>o.value===pend.cat)) $('#expCat').value=pend.cat, expToggle(false);
+    if(pend.catId&&[...$('#expCat').options].some(o=>o.value===pend.catId)) $('#expCat').value=pend.catId, expToggle(false);
     pend.p.then(res=>{
       if(expPending===pend) expPending=null;
       if(!alive()) return;
@@ -1611,7 +1773,7 @@ function openAiOrganize(){
       if(res.gen!==expGen){ msg.textContent='그 사이 다른 일이 있어 이 결과는 쓰지 않았습니다.'; return; }
       if(res.err){ msg.textContent='실패: '+(res.err.message||res.err.code||'오류'); return; }
       if(!res.items.length){ msg.textContent='제안을 받지 못했습니다. 주제 힌트를 조금 더 구체적으로 적고 다시 시도해 주세요. (이번 시도에도 사용량 15회분은 차감됩니다)'; return; }
-      exp={cat:res.cat,isNew:res.isNew,items:res.items};
+      exp={cat:res.cat,catId:res.catId||'',isNew:res.isNew,items:res.items};
       msg.textContent=expSummary(res.r);
       renderExp();
     });
@@ -1623,33 +1785,42 @@ function openAiOrganize(){
     if(!ME.name){ msg.textContent=NEEDNAME; return; }
     if(expPending){ expAttach(expPending); return; }
     const raw=$('#expCat').value, pickNew=raw==='__new';
-    let cat=raw, subs=null;
+    let catId=pickNew?'':raw, cat=pickNew?'':catName(raw), subs=null;
     if(pickNew){
       cat=$('#expNew').value.trim();
       if(!cat){ msg.textContent='새 분야 이름을 적어 주세요.'; $('#expNew').focus(); return; }
-      if(/[:：,，]/.test(cat)){ msg.textContent='분야 이름에는 쉼표와 콜론을 쓸 수 없습니다. 하위분야를 나누는 기호라서 그렇습니다.'; return; }
-      if(expCats.includes(cat)){ msg.textContent='이미 있는 분야입니다. 위 목록에서 골라 주세요.'; $('#expCat').value=cat; expToggle(false); return; }
-      subs=$('#expSubs').value.split(/[,，]/).map(s=>s.replace(/[:：]/g,' ').trim()).filter(Boolean).slice(0,12).map(s=>s.slice(0,60));
+      // 분야 이름의 쉼표·콜론 금지는 텍스트 편집기 시절의 제약이었다. 행 편집기에는 구분자가 없다.
+      // 창을 열 때의 스냅샷만 보면 방금 만든 분야를 못 잡는다. 지금 목록도 함께 본다.
+      const same=expCats.find(c=>c.name===cat)||S.cats.find(c=>c.name===cat);
+      if(same){
+        msg.textContent='이미 있는 분야입니다. 위 목록에서 골라 주세요.';
+        const csel=$('#expCat');
+        if(![...csel.options].some(o=>o.value===same.id)) csel.add(new Option(`${same.name} (0개)`,same.id),csel.options.length-1);
+        csel.value=same.id; expToggle(false); return;
+      }
+      subs=$('#expSubs').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean).slice(0,12).map(s=>s.slice(0,60));
     }
     out.innerHTML=''; exp=null; expCache=null;
     const gen=++expGen;
     // 결과를 받아 캐시에 넣는 일은 창과 상관없이 이 약속(Promise) 안에서 끝낸다
-    const req=store.ai('expand',{category:cat,topic:$('#expTopic').value.trim(),
-      count:+$('#expCount').value, mix:$('#expMix').value, ...(pickNew?{subs}:{})})
+    const req=store.ai('expand',{...(pickNew?{newCategoryName:cat,category:cat,subs}:{categoryId:catId,category:cat}),
+      topic:$('#expTopic').value.trim(), count:+$('#expCount').value, mix:$('#expMix').value})
       .then(r=>{
-        const items=(r.items||[]).map(x=>({...x})), got={r,items,gen,cat:r.category||cat,isNew:!!r.isNew};
-        if(gen===expGen&&items.length) expCache={cat:got.cat,isNew:got.isNew,items,at:Date.now()};
+        // isNew 면 서버가 categoryId 를 일부러 비운 것이다. 내가 들고 있던 옛 id 로 도로 채우면
+        // (지워진 분야를 가리키는 낡은 탭) 분야를 만들지 않고 자료만 들어가 전부 "분야 없음" 이 된다.
+        const items=(r.items||[]).map(x=>({...x})), got={r,items,gen,cat:r.category||cat,catId:r.isNew?'':(r.categoryId||catId),isNew:!!r.isNew};
+        if(gen===expGen&&items.length) expCache={cat:got.cat,catId:got.catId,isNew:got.isNew,items,at:Date.now()};
         return got;
-      },e=>({err:e,items:[],cat,gen}));
-    expPending={cat,p:req,gen};
+      },e=>({err:e,items:[],cat,catId,gen}));
+    expPending={cat,catId,p:req,gen};
     expAttach(expPending);
   });
 
   function renderExp(){
     const out=$('#expOut');
     if(!exp||!exp.items.length){ out.innerHTML=''; return; }
-    const known=new Set((S.cats.find(x=>x.name===exp.cat)||{subs:[]}).subs);
-    S.items.forEach(i=>{ if(i.category===exp.cat&&i.sub) known.add(i.sub); });
+    const known=new Set((catOf(exp.catId)||{subs:[]}).subs);
+    S.items.forEach(i=>{ if(exp.catId&&i.categoryId===exp.catId&&i.sub) known.add(i.sub); });
     out.innerHTML=`<div class="ai-row">
         <label class="hint" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="expAll" aria-label="전체 선택"> 전체 선택</label>
         <button type="button" class="btn ghost small" id="expSafeBtn">안전한 것만</button>
@@ -1690,31 +1861,55 @@ function openAiOrganize(){
   }
 
   async function expAdd(){
-    const out=$('#expOut'), m=$('#expAddMsg');
+    // 아래에 분야 만들기(await)가 끼어 있다. 그 사이 창이 닫히면 $('#...') 가 null 이 되므로
+    // 쓰기 전에 한 번 잡아 두고 전부 있는지 보고 쓴다. 예전에는 await 이 없어 이 구멍이 없었다.
+    const out=$('#expOut'), m=$('#expAddMsg'), addBtn=$('#expAdd'), goBtn=$('#expBtn'), tagBox=$('#expTag');
     if(!exp||!exp.items.length){ m.textContent='추가할 제안이 없습니다.'; return; }
     // 지금 켜고 끈 상태를 항목에 적어 둔다. 다시 그릴 때 운영자가 끈 것이 되살아나지 않도록.
     out.querySelectorAll('[data-xi]').forEach(c=>{ const p=exp.items[+c.dataset.xi]; if(p&&!c.disabled) p.pick=c.checked; });
     const sel=[...out.querySelectorAll('[data-xi]:checked')].map(c=>exp.items[+c.dataset.xi]).filter(p=>!expBad(p));
     if(!sel.length){ m.textContent='선택한 자료가 없습니다.'; return; }
     if(!ME.name){ m.textContent=NEEDNAME; return; }
+    // 새 분야는 자료보다 **먼저** 만든다. 순서가 반대면 그 자료들이 분야를 못 이어 고아가 된다 —
+    // 담당자가 고칠 수도 점검할 수도 없고, 다음 제안에서 중복으로 걸러지지도 않는다.
+    // 자료가 하나도 안 들어가 빈 분야만 남으면 "분야 편집" 에서 지우면 된다 (자료가 없으면 지워진다).
+    let catId=exp.catId||((S.cats.find(c=>c.name===exp.cat)||{}).id||''), madeCat=false;
+    if(!catId){
+      if(addBtn) addBtn.disabled=true;
+      if(alive()) m.textContent=`분야 "${exp.cat}" 를 만드는 중…`;
+      try{
+        const saved=await store.saveCategories([...S.cats.map(c=>({...c,subs:c.subs.slice()})),{id:'',name:exp.cat,subs:[]}]);
+        catId=((saved||[]).find(c=>c.name===exp.cat)||{}).id||''; madeCat=true; exp.catId=catId;
+        // 방금 만든 분야를 이 창의 목록에도 넣는다. 안 넣으면 같은 이름으로 "새 분야" 요청이 또 나가고,
+        // 서버는 자료가 없는 분야로 알고 방금 넣은 것을 그대로 다시 제안한다 (사용량 15회분).
+        if(catId&&!expCats.some(c=>c.id===catId)){
+          expCats.push({id:catId,name:exp.cat});
+          const csel=$('#expCat');
+          if(csel) csel.add(new Option(`${exp.cat} (0개)`,catId),csel.options.length-1);
+        }
+      }catch(x){
+        if(addBtn) addBtn.disabled=false;
+        if(alive()) m.textContent='분야를 만들지 못했습니다 ('+(x.message||x.code||'오류')+'). 다시 눌러 주세요.';
+        return;
+      }
+    }
     // 저장하는 동안에는 "제안 받기" 도 막는다. 도중에 새 요청이 들어오면 exp 가 갈려 루프가 죽는다.
-    $('#expAdd').disabled=true; $('#expBtn').disabled=true;
+    if(addBtn) addBtn.disabled=true; if(goBtn) goBtn.disabled=true;
     out.querySelectorAll('input[type=checkbox]').forEach(c=>c.disabled=true);
     // 저장하는 동안에는 캐시를 비운다. 이때 창을 닫고 다시 열어 "이어서 보기" 를 누르면
     // 방금 들어간 자료를 한 벌 더 넣게 된다. 남은 것은 끝에서 다시 담는다.
     const keepAt=(expCache&&expCache.at)||Date.now(), gen=++expGen;
     expCache=null;
-    const extra=$('#expTag').checked?['ai제안']:[];
+    const extra=(tagBox&&tagBox.checked)?['ai제안']:[];
     const now=new Date().toISOString(), done=[];
     let ok=0, bad=0;
-    // 자료를 먼저 넣는다. 분야를 먼저 만들면 저장이 다 실패했을 때 빈 분야만 남는다.
     for(const p of sel){
       const item={
         id:uid(), type:p.type, title:p.title,
         url:p.type==='link'?safeUrl(p.url):'',
         lang:p.type==='snippet'?(p.lang||''):'',
         body:(p.body||'').replace(/\s+$/,''),
-        category:exp.cat, sub:(p.sub||'').trim(),
+        category:exp.cat, categoryId:catId, sub:(p.sub||'').trim(),
         tags:[...new Set([...(p.tags||[]).map(t=>String(t).replace(/^#/,'').trim()).filter(Boolean),...extra])].slice(0,20),
         votes:0, by:ME.name, ownerId:ME.id, createdAt:now,
       };
@@ -1722,34 +1917,34 @@ function openAiOrganize(){
       catch(x){ bad++; p.err=x.message||x.code||'오류'; }
       if(alive()) m.textContent=`추가 중… ${ok+bad}/${sel.length}`;
     }
-    // 분야·하위분야는 성공한 것만 모아 마지막에 한 번 반영한다 (목록 전체를 덮어쓰는 호출이라서)
-    let catMsg='';
-    if(ok){
+    // 하위분야는 성공한 것만 모아 마지막에 한 번 반영한다 (목록 전체를 덮어쓰는 호출이라서)
+    let catMsg=madeCat?`, 새 분야 "${exp.cat}" 를 만들었습니다`:'';
+    if(ok&&catId){
       const merged=S.cats.map(c=>({...c,subs:c.subs.slice()}));
-      let t=merged.find(c=>c.name===exp.cat), newCat=false, newSub=0;
-      if(!t){ t={name:exp.cat,subs:[]}; merged.push(t); newCat=true; }
-      done.forEach(it=>{ if(it.sub&&!t.subs.includes(it.sub)){ t.subs.push(it.sub); newSub++; } });
-      if(newCat||newSub){
-        try{ await store.saveCategories(merged);
-          catMsg=(newCat?`, 새 분야 "${exp.cat}" 를 만들었습니다`:'')+(newSub?`, 하위분야 ${newSub}개 추가`:'');
-        }catch(x){ catMsg=', 분야 목록에는 반영하지 못했습니다'; }
+      const t=merged.find(c=>c.id===catId); let newSub=0;
+      if(t){
+        done.forEach(it=>{ if(it.sub&&!t.subs.includes(it.sub)){ t.subs.push(it.sub); newSub++; } });
+        if(newSub){
+          try{ await store.saveCategories(merged); catMsg+=`, 하위분야 ${newSub}개 추가`; }
+          catch(x){ catMsg+=', 하위분야는 목록에 반영하지 못했습니다'; }
+        }
       }
     }
     if(ok) toast(`자료 ${ok}개를 추가했습니다`);
     exp.items=exp.items.filter(p=>!(sel.includes(p)&&!p.err));   // 들어간 것만 목록에서 뺀다
     // 저장이 도는 사이 다른 요청이 캐시를 차지했으면 건드리지 않는다. 시각도 처음 받은 때 그대로 둔다.
     if(gen===expGen) expCache=exp.items.length?{...exp,at:keepAt}:null;
-    if(alive()) $('#expBtn').disabled=false;
+    if(goBtn) goBtn.disabled=false;
     if(!alive()) return;
     const line=`완료: ${ok}개 추가${bad?`, ${bad}개 실패`:''}${catMsg}`;
     if(!exp.items.length){
       $('#expOut').innerHTML='';
       $('#expMsg').innerHTML=esc(line)+' <button type="button" class="btn small" id="expGo">이 분야 보기</button>';
-      const go=exp.cat;
+      const go=catId;
       $('#expGo').addEventListener('click',()=>{
-        Object.assign(S,{q:'',type:'all',cat:go,sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'});
+        Object.assign(S,{q:'',type:'all',catId:go||'all',sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'});
         $('#q').value='';
-        if(!S.openCats.includes(go)){ S.openCats=[...S.openCats,go]; LS.set('toolbox.openCats',S.openCats); }
+        if(go&&!S.openCatIds.includes(go)){ S.openCatIds=[...S.openCatIds,go]; LS.set('toolbox.openCatIds',S.openCatIds); }
         expCache=null; closeModal(); render();
       });
     }else{ renderExp(); $('#expAddMsg').textContent=line+(bad?'. 실패한 것은 다시 누를 수 있습니다.':'. 남은 것은 그대로 두거나 다시 골라 추가하세요.'); }
@@ -1793,7 +1988,8 @@ function openIO(){
       <div class="hint" id="ioMsg"></div>
   </div>`);
   $('#exportBtn').addEventListener('click',()=>{
-    const data=JSON.stringify({exportedAt:new Date().toISOString(),categories:S.cats,items:S.items.filter(x=>!x.example),collections:S.cols},null,2);
+    // v:2 는 "분야 id 가 들어 있다" 는 표시다. 옛 백업(v 없음)은 이름으로만 이어 붙일 수 있다.
+    const data=JSON.stringify({v:2,exportedAt:new Date().toISOString(),categories:S.cats,items:S.items.filter(x=>!x.example),collections:S.cols},null,2);
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type:'application/json'})); a.download='toolbox-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('내보냈습니다');
   });
   $('#importFile').addEventListener('change',async e=>{
@@ -1802,23 +1998,54 @@ function openIO(){
     try{
       const j=JSON.parse(await f.text()); const arr=Array.isArray(j)?j:(j.items||[]);
       if(!arr.length) throw new Error('항목이 없습니다');
-      let ok=0,fail=0;
+      let ok=0,fail=0,noCat=0,catErr='',why='';
+      // 분야를 자료보다 **먼저** 넣는다. 순서가 반대면 파일에만 있던 분야의 자료가 분야를 못 이어 고아가 된다.
+      // 실패해도 자료 가져오기는 이어 간다. 이 오류를 큰 try 에 맡기면 "읽을 수 없는 파일" 로 나와 파일을 의심하게 된다.
+      if(S.admin&&Array.isArray(j.categories)&&j.categories.length){
+        const merged=S.cats.map(c=>({...c,subs:c.subs.slice()})), add=[];
+        normCats(j.categories).forEach(c=>{
+          const ex=merged.find(x=>(c.id&&x.id===c.id)||x.name===c.name);   // id 우선, 없으면 이름 (옛 백업)
+          if(ex) ex.subs=[...new Set([...ex.subs,...c.subs])]; else add.push({id:c.id||'',name:c.name,subs:c.subs});
+        });
+        // 파일에만 있는 분야는 말없이 만들지 않는다. id 없는 옛 백업 + 그 사이 개명이면
+        // 옛 이름으로 분야가 하나 더 생기고, 아래 자료 루프가 기존 자료를 통째로 그 빈 분야로 옮긴다
+        // (담당자 지정은 원래 분야에 남아, 담당자가 자기 자료를 못 고치게 된다).
+        const mk=add.length? confirm(`파일에만 있는 분야 ${add.length}개(${add.slice(0,5).map(c=>c.name).join(', ')}${add.length>5?' 외':''})를 새로 만들까요?\n\n이름이 바뀐 분야라면 같은 분야가 둘로 갈라집니다.\n[취소] 를 누르면 만들지 않고, 그 이름을 쓰는 자료는 지금 연결을 그대로 둡니다.`) : false;
+        if(mk) add.forEach(c=>merged.push(c));
+        else if(add.length) catErr=` · 파일에만 있는 분야 ${add.length}개는 만들지 않았습니다`;
+        try{ await store.saveCategories(merged); }
+        // 여기서 바로 msg 에 쓰면 아래 "가져오는 중…" 이 첫 자료에서 덮어 버린다. 끝까지 들고 간다.
+        catch(x){ catErr=' · 분야 목록은 반영하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+      }
       for(const raw of arr){
         const rid=okId(raw.id)?String(raw.id):uid();                 // 이상한 id 는 새로 만든다 (화면 속성에 그대로 들어가므로)
         const ex=S.items.find(x=>x.id===rid);
-        const it={id:rid,type:TYPES[raw.type]?raw.type:'link',title:String(raw.title||raw.url||'(제목 없음)'),url:String(raw.url||''),lang:String(raw.lang||''),body:String(raw.body||''),category:String(raw.category||''),sub:String(raw.sub||''),tags:Array.isArray(raw.tags)?raw.tags.map(String):[],
+        // 분야는 id 를 먼저 믿고, 없거나 목록에 없으면 이름으로 잇는다.
+        // 둘 다 안 되면 **이미 있던 자료의 연결을 그대로 둔다**. 여기서 빈 값을 넘기면 category_id 가
+        // null 로 덮여, 멀쩡히 이어져 있던 자료가 오류 하나 없이 "분야 없음" 으로 떨어지고
+        // 그 분야 담당자는 권한까지 잃는다 (트리거는 명시적으로 보낸 null 을 구제해 주지 않는다).
+        const cid=((raw.categoryId&&catOf(String(raw.categoryId)))?String(raw.categoryId):'')
+          ||(raw.category?((S.cats.find(c=>c.name===String(raw.category))||{}).id||''):'')
+          ||(ex?ex.categoryId:'')||'';
+        // 실제로 분야를 잃은 것만 센다. 기존 연결을 지킨 자료는 "분야 없음" 에 모이지 않는다.
+        if(!cid&&(raw.category||raw.categoryId)) noCat++;
+        // 이름 사본도 id 에서 끌어낸다. 파일에 남아 있던 낡은 이름을 그대로 실으면 어긋난 채로 굳는다.
+        const cname=cid?(catName(cid)||String(raw.category||'')):(String(raw.category||'')||(ex?ex.category:'')||'');
+        const it={id:rid,type:TYPES[raw.type]?raw.type:'link',title:String(raw.title||raw.url||'(제목 없음)'),url:String(raw.url||''),lang:String(raw.lang||''),body:String(raw.body||''),category:cname,categoryId:cid,sub:String(raw.sub||''),tags:Array.isArray(raw.tags)?raw.tags.map(String):[],
           // 이미 있는 항목은 올린 사람·소유자·수정시각을 그대로 둔다 (백업 복원 시 소유권이 넘어가지 않게)
           by:ex?ex.by:String(raw.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(raw.createdAt||new Date().toISOString()),updatedAt:ex?ex.updatedAt:(raw.updatedAt||null)};
         if(ex&&!canEdit(ex)){ fail++; continue; }
-        try{ await store.put(it); ok++; }catch(x){ fail++; }
+        // 서버가 왜 거절했는지 한 줄이라도 보여 준다. 개수만 보이면 새로 고치면 될 일인지 알 수 없다
+        // (예: "분야 목록이 그 사이에 바뀌었습니다. 화면을 새로 고친 뒤 다시 저장해 주세요").
+        try{ await store.put(it); ok++; }catch(x){ fail++; if(!why) why=x.message||x.code||''; }
         msg.textContent=`가져오는 중… ${ok+fail}/${arr.length}`;
       }
       if(Array.isArray(j.collections)) for(const c of j.collections){ if(!(c&&okId(c.id)&&c.title)) continue;
         const ex=S.cols.find(x=>x.id===c.id); if(ex&&!canEdit(ex)) continue;
         await store.putCol({id:String(c.id),title:String(c.title),desc:String(c.desc||''),itemIds:(Array.isArray(c.itemIds)?c.itemIds:[]).filter(okId),
           by:ex?ex.by:String(c.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(c.createdAt||new Date().toISOString())}); }
-      if(S.admin&&Array.isArray(j.categories)&&j.categories.length){ const merged=S.cats.slice(); normCats(j.categories).forEach(c=>{ const ex=merged.find(x=>x.name===c.name); if(ex) ex.subs=[...new Set([...ex.subs,...c.subs])]; else merged.push({name:c.name,subs:c.subs}); }); await store.saveCategories(merged); }
-      msg.textContent=`완료: ${ok}개 추가·갱신${fail?`, ${fail}개 건너뜀(권한 없음 또는 실패)`:''}`; toast(`${ok}개를 가져왔습니다`);
+      msg.textContent=`완료: ${ok}개 추가·갱신${fail?`, ${fail}개 건너뜀(권한 없음 또는 실패)`:''}`
+        +(noCat?` · 분야를 찾지 못한 자료 ${noCat}건은 "분야 없음" 에 모입니다`:'')+catErr+(why?` · ${why}`:''); toast(`${ok}개를 가져왔습니다`);
     }catch(x){ msg.textContent='읽을 수 없는 파일입니다: '+(x.message||x); }
     e.target.value='';
   });
@@ -1860,7 +2087,8 @@ render();
     Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||'',suggestedName:me.suggestedName||''});
     S.admin=!!me.admin; render();
   });
-  S.openCats=(LS.get('toolbox.openCats',[])||[]).filter(x=>typeof x==='string');
+  // 키를 갈았다. 옛 'toolbox.openCats' 에는 분야 이름이 들어 있어 id 와 영영 안 맞는다.
+  S.openCatIds=(LS.get('toolbox.openCatIds',[])||[]).filter(x=>typeof x==='string');
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));

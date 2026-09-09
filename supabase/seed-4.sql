@@ -1,13 +1,19 @@
 -- 유머 분야 + 자료 12개. schema.sql 을 실행한 뒤 SQL Editor 에서 실행하세요.
 -- 여러 번 실행해도 중복되지 않습니다. owner_id 가 비어 있으므로 운영자만 수정·삭제할 수 있습니다.
 
--- ---------- 분야 추가: settings.categories 에 '유머' 가 없을 때만 붙임 ----------
+-- ---------- 분야 추가: settings.categories 에 id 'humor' 도 이름 '유머' 도 없을 때만 붙임 ----------
 insert into public.settings (key, value) values ('categories', '{"list":[]}'::jsonb) on conflict (key) do nothing;
 update public.settings
-   set value = jsonb_set(value, '{list}', coalesce(value->'list', '[]'::jsonb) || '[{"name":"유머","subs":["만화·웹툰","개발자 유머","밈·인터넷 문화","이스터에그·장난"]}]'::jsonb),
+   set value = jsonb_set(value, '{list}', coalesce(value->'list', '[]'::jsonb) || '[{"id":"humor","name":"유머","subs":["만화·웹툰","개발자 유머","밈·인터넷 문화","이스터에그·장난"]}]'::jsonb),
        updated_at = now()
  where key = 'categories'
-   and not exists (select 1 from jsonb_array_elements(coalesce(value->'list', '[]'::jsonb)) c where c->>'name' = '유머');
+   -- 중복 판정은 **id 가 먼저**다. 이름만 보면 분야를 개명한 뒤 이 파일을 다시 돌릴 때
+   -- 같은 id 를 한 번 더 붙이게 되고, settings_keep_ids 가 '같은 id 의 분야가 두 개입니다' 로
+   -- 이 스크립트 전체를 막아 아래 자료 12건까지 통째로 롤백된다.
+   -- 이름도 함께 보는 것은, 화면에서 같은 이름의 분야를 이미 만들어 둔(= 다른 id 를 받은) 경우
+   -- '같은 이름의 분야가 두 개입니다' 로 같은 롤백이 나기 때문이다.
+   and not exists (select 1 from jsonb_array_elements(coalesce(value->'list', '[]'::jsonb)) c
+                    where c->>'id' = 'humor' or c->>'name' = '유머');
 
 -- ---------- 자료 ----------
 insert into public.items (id, type, title, url, lang, body, category, sub, tags, by, created_at) values
@@ -26,3 +32,15 @@ insert into public.items (id, type, title, url, lang, body, category, sub, tags,
 ('seed4-12','snippet','터미널에서 잠깐 웃기 (sl · cowsay · fortune)','','bash',E'# ls 를 sl 로 잘못 치면 증기기관차가 화면을 가로지른다\nsudo apt install sl fortune-mod cowsay figlet   # 데비안·우분투\nbrew install sl fortune cowsay figlet           # macOS\n\nsl                 # 기차\nfortune | cowsay   # 소가 한마디\nfiglet "DEPLOY OK" # 큰 글자로 공지\n\n# 셸을 켤 때마다 한마디 (~/.bashrc 또는 ~/.zshrc 맨 아래)\n# fortune | cowsay','유머','이스터에그·장난','{cli,터미널,bash}','초기 자료','2026-09-07T02:55:00Z')
 
 on conflict (id) do nothing;
+
+-- ---------- 분야 잇기 ----------
+-- 분야를 이름이 아니라 id 로 못 박는다. 위 insert 는 이름만 싣는데,
+-- 이 분야를 개명한 DB 에서는 그 이름이 목록에 없어 트리거가 id 를 못 찾고
+-- 자료가 오류 하나 없이 전부 "분야 없음" 으로 떨어진다.
+-- 이미 다른 분야로 옮겨 둔 자료는 category_id 가 차 있으므로 건드리지 않는다.
+update public.items set category_id = 'humor'
+ where id like 'seed4-%' and category_id is null
+   and exists (select 1 from public.settings s,
+                      lateral jsonb_array_elements(coalesce(s.value->'list','[]'::jsonb)) c
+                where s.key='categories' and c->>'id' = 'humor');
+
