@@ -6,11 +6,28 @@
 - [ ] **Anthropic 키 교체**: 지금 키는 2026-10-07 만료. 만료는 생성 시에만 정해지고 연장이 안 된다.
   콘솔에서 **만료 Never** 로 새 키를 만들고 `npx supabase secrets set --project-ref csxndscngmkciibarumi "ANTHROPIC_API_KEY=새키"` 로 교체한 뒤 옛 키 삭제.
   함수 재배포는 필요 없다. 만료 7일 전·1일 전 안내 메일이 온다. (자동 갱신은 불가능 — 키 생성 API 가 없고 개인 계정은 관리용 API 자체를 못 쓴다)
-- [ ] **`schema.sql` 재실행 + 함수 재배포**: 주 관리자 권한 함수·정책, AI 한도 환불 함수가 새로 들어갔다.
-  `npx supabase functions deploy ai` 도 함께.
+- [x] **`schema.sql` 재실행 + 함수 재배포 완료** (2026-09-09).
+  `ai_take_quota(lim, cost)`·`ai_refund_quota(cost)`·`mark_checked(ids)`·`items.checked_at` 반영 확인,
+  세 함수 모두 비로그인 호출은 42501 로 막히는 것까지 확인.
+  **순서 주의**: 함수를 먼저 배포하면 DB 에 옛 함수뿐이라 **✦ AI 분류 제안까지 전부** 죽는다. 스키마가 먼저다.
+  (이번에 실제로 겪었다. 예전 내용이 든 SQL Editor 탭을 그대로 실행해 스키마만 옛것으로 남았고,
+  그 사이 AI 기능 전체가 "사용량을 확인하지 못했습니다" 였다. 실행 뒤에는 아래 쿼리로 확인할 것)
+  ```sql
+  select proname, pronargs from pg_proc
+   where pronamespace = 'public'::regnamespace
+     and proname in ('ai_take_quota','ai_refund_quota','mark_checked');
+  ```
+  새로 들어간 것: 주 관리자 권한 함수·정책, `items.checked_at` 컬럼, 가중치를 받는 `ai_take_quota(lim, cost)`·`ai_refund_quota(cost)`,
+  점검 시각을 찍는 `mark_checked(ids)`. 옛 `ai_take_quota(integer)` 는 스크립트가 알아서 지운다.
+  ```bash
+  npx supabase functions deploy ai
+  ```
+  실행 뒤 확인: `select proname, pronargs from pg_proc where proname in ('ai_take_quota','ai_refund_quota','mark_checked');` 이 3줄이면 정상.
 - [ ] `supabase/seed-4.sql` 실행 (유머 분야 + 자료 12개)
-- [ ] 운영자로 **✦ AI 정리** (재분류 표, 분야 구조 개편안) 한 번 눌러 보기
+- [ ] 운영자로 **✦ AI 정리** 세 섹션을 한 번씩 눌러 보기 (재분류 표, 분야 구조 개편안, **분야에 자료 채우기**)
   (함수 코드를 고치면 `npx supabase functions deploy ai` 만 다시 실행. 로그는 대시보드 Edge Functions → ai → Logs)
+- [ ] **자료 채우기 첫 실전**: 자료가 적은 분야를 골라 5개로 한 번 돌려 보고, 링크 배지("정상/없음/확인 불가")가
+  실제 상태와 맞는지, 중복 판정이 맞는지 확인. 메모·코드는 내용을 직접 읽고 고를 것
 - [ ] **운영자 지정**: Supabase SQL Editor 에서 실행 (README 6단계). 실행 후 사이트에 "운영자" 표시·"검토함" 버튼 확인
   ```sql
   update public.profiles set is_admin = true
@@ -57,8 +74,16 @@
 - [ ] **이름 바꾸기가 과거 글에 반영 안 됨**: `by` 가 항목마다 복제된 스냅샷이라 그렇다. 표시할 때 프로필에서 읽어오는 방식으로 바꿀지 검토
 - [ ] **모음 고아 id**: 항목을 지워도 남의 모음에 든 id 는 남는다. 화면에서 걸러 보여 주거나 정리 작업 필요
 - [ ] **신고 중복·고아**: `reports.item_id` 에 외래키가 없고, 같은 사람이 같은 항목을 여러 번 신고할 수 있다
-- [ ] **AI 재분류 표가 모바일에서 읽기 어려움**: 5열을 카드 형태로 바꾸기
-- [ ] **프롬프트 인젝션**: AI 정리에 다른 사람이 쓴 내용이 그대로 들어가고 제안 표는 기본 전체 체크. 기본 해제로 바꿀지 검토
+- [ ] **AI 재분류 표가 모바일에서 읽기 어려움**: 표에 thead/tbody 를 넣어 좁은 화면 눕히기 규칙이 이제 실제로 먹지만,
+  칸에 이름표가 없어 값만 쌓인다. 3번 섹션처럼 카드로 바꾸면 깔끔하다
+- [ ] **프롬프트 인젝션**: 자료 채우기(expand)의 시스템 프롬프트에 들어가는 남의 글은 `flat()` 으로 한 줄로 눕혔지만,
+  organize·suggest 의 **사용자 메시지**는 여전히 원문 그대로다(본문에 줄바꿈이 있어야 분류가 제대로 된다).
+  재분류 제안 표가 기본 전체 체크인 것도 그대로. 기본 해제로 바꿀지 검토
+- [ ] **AI 정리 3번(자료 채우기)에서 알면서 남긴 것**
+  - 위험 명령을 "설명"하는 정상 메모도 `risk=block` 으로 막힌다. 운영자가 새 항목으로 직접 올리면 된다
+  - `ai_refund_quota` 는 "지금 날짜" 행을 깎는다. 30~60초짜리 요청이 자정을 넘겨 실패하면 환불이 다음 날로 간다 (드묾)
+  - 1번 섹션 라디오 옆 개수는 창을 열 때 센 값이다. 처리 대상은 누를 때 다시 세므로 안전하지만 숫자는 낡을 수 있다
+  - IPv6 리터럴 주소(`http://[2606:...]`)는 링크 점검에서 통째로 "확인 불가" 가 된다. 자동으로 버리지는 않는다
 - [ ] **카카오 키 파일**(`supabase/톡연계정보.txt`)을 저장소 폴더 밖으로 옮기기. 지금은 `.gitignore` 한 줄이 유일한 방어
 
 ## 나중에

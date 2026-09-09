@@ -361,6 +361,28 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(
 .ai-new{color:var(--good)}
 .ai-tag{font-size:10.5px;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:0 5px;white-space:nowrap}
 .ai-notes{margin:0;padding-left:18px;color:var(--muted);font-size:12.5px;line-height:1.6}
+.lk{font-size:10.5px;border-radius:4px;padding:0 5px;white-space:nowrap;border:1px solid currentColor}
+.lk.ok{color:var(--good)} .lk.dead{color:var(--bad)} .lk.unknown{color:var(--muted)}
+.ai-prev{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--muted);max-height:170px;overflow:auto;
+  background:var(--bg2);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:6px}
+.ai-prev.code{font-family:var(--mono);font-size:11.5px}
+.ai-card.blocked{border-left:3px solid var(--bad);padding-left:9px}   /* 흐리게 하면 정작 읽어야 할 이유가 안 보인다 */
+.ai-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+/* 제안받은 새 자료는 표가 아니라 카드로 본다. 본문을 다 읽어야 판단할 수 있기 때문이다. */
+.ai-card{padding:10px 12px;border-top:1px solid var(--line)}
+.ai-card:first-child{border-top:0}
+.ai-card-h{display:flex;align-items:center;gap:7px;flex-wrap:wrap;cursor:pointer;font-size:13px}
+.ai-card-h b{font-weight:600}
+.ai-card .kind{padding:3px 6px;margin-top:0}
+.ai-card-m{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:5px}
+.ai-card-m a.chip{text-decoration:none}
+.ai-card .hint{word-break:break-all}
+.ai-bad{color:var(--bad)}
+@media(max-width:700px){.ai-fields{grid-template-columns:1fr}
+  .ai-tbl,.ai-tbl tbody,.ai-tbl tr,.ai-tbl td{display:block;width:100%}
+  .ai-tbl thead{display:none}
+  .ai-tbl tr{border-top:1px solid var(--line);padding:8px 4px}
+  .ai-tbl td{border:0;padding:2px 4px}}
 
 /* ---------- toast ---------- */
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 14px;border-radius:8px;font-size:13px;z-index:60;box-shadow:var(--shadow);opacity:0;transition:opacity .15s;pointer-events:none;max-width:90vw}
@@ -496,7 +518,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
       <div class="rail-list" id="typeList"></div>
     </details>
     <details class="sec" id="catBox">
-      <summary><span class="ttl">분야</span><span class="cur" id="catCur"></span><span class="acts"><button type="button" id="catEdit" hidden title="분야·하위분야 편집">편집</button><button type="button" id="catAi" hidden title="AI 로 항목 재분류·분야 구조 제안">✦ AI</button></span></summary>
+      <summary><span class="ttl">분야</span><span class="cur" id="catCur"></span><span class="acts"><button type="button" id="catEdit" hidden title="분야·하위분야 편집">편집</button><button type="button" id="catAi" hidden title="AI 로 항목 재분류·분야 구조·자료 채우기">✦ AI</button></span></summary>
       <div class="rail-list" id="catList"></div>
     </details>
     <details class="sec" id="colBox">
@@ -592,6 +614,7 @@ function LocalStore(){
     async vote(id){ if(D.votes.includes(id)) return 'dup'; D.votes.push(id); LS.set(K.votes,D.votes); const i=D.items.findIndex(x=>x.id===id); if(i>=0) D.items[i].votes=(D.items[i].votes||0)+1; LS.set(K.items,D.items); emit(); return 'added' },
     async saveCategories(list){ D.cats=normCats(list); LS.set(K.cats,D.cats); emit() },
     async people(){ return me.name?[{id:me.id,name:me.name}]:[] },
+    async markChecked(ids){ const at=new Date().toISOString(); (ids||[]).forEach(id=>{ const it=D.items.find(x=>x.id===id); if(it) it.checkedAt=at; }); LS.set(K.items,D.items); emit(); return (ids||[]).length },
     async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
   };
 }
@@ -603,7 +626,7 @@ function SupabaseStore(){
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({...D,items:D.items.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.myVotes.slice()}));
   // row ↔ item 변환
-  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null});
+  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null,checkedAt:r.checked_at||null});
   const toItem=i=>({id:i.id,type:i.type,title:i.title,url:i.url||'',lang:i.lang||'',body:i.body||'',category:i.category||'',sub:i.sub||'',tags:i.tags||[],by:i.by||'',owner_id:i.ownerId||me.id,created_at:i.createdAt||new Date().toISOString(),updated_at:i.updatedAt||null});
   const fromCol=r=>({id:r.id,title:r.title,desc:r.desc||'',itemIds:r.item_ids||[],by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null});
   const toCol=c=>({id:c.id,title:c.title,desc:c.desc||'',item_ids:c.itemIds||[],by:c.by||'',owner_id:c.ownerId||me.id,created_at:c.createdAt||new Date().toISOString(),updated_at:c.updatedAt||null});
@@ -680,7 +703,9 @@ function SupabaseStore(){
     // 운영자가 남의 항목을 고칠 때 항상 42501 이 난다. 수정 시 owner_id·created_at 은 보내지 않아 소유권도 지킨다.
     async put(it){
       const row=toItem(it);
-      const upd=()=>{ const {owner_id,created_at,...rest}=row; return sb.from('items').update(rest).eq('id',it.id) };
+      // id·owner_id·created_at 은 고치는 값이 아니다. 특히 id 는 update 권한을 준 컬럼 목록에 없어서
+      // 본문에 실어 보내면 통째로 42501 이 난다 (schema.sql 의 grant update (...) 참고).
+      const upd=()=>{ const {id,owner_id,created_at,...rest}=row; return sb.from('items').update(rest).eq('id',it.id) };
       if(D.items.some(x=>x.id===it.id)){ const {error}=await upd(); if(error) fail(error); }
       else{
         const {error}=await sb.from('items').insert(row);
@@ -711,6 +736,22 @@ function SupabaseStore(){
       const {data,error}=await sb.from('profiles').select('id,name').order('created_at');
       if(error) fail(error);
       return (data||[]).map(r=>({id:r.id,name:(r.name||'').trim()})).filter(p=>p.name);
+    },
+    // AI 정리로 살펴본 항목에 점검 시각을 찍는다. 제안이 없었어도 찍어야 다음번에 다시 보지 않는다.
+    // checked_at 은 사용자가 직접 못 고치는 컬럼이라 mark_checked 함수로 찍는다 (schema.sql).
+    async markChecked(ids){
+      const list=[...new Set((ids||[]).filter(Boolean))];
+      if(!list.length) return 0;
+      const at=new Date().toISOString(); let done=0;
+      // 100개씩 나눠 보낸다. 한 번에 다 보내면 요청이 길어져 통째로 실패한다.
+      for(let i=0;i<list.length;i+=100){
+        const part=list.slice(i,i+100);
+        const {data,error}=await sb.rpc('mark_checked',{ids:part});
+        if(error) fail(error,'점검 시각을 남기지 못했습니다');   // 부르는 쪽이 한 번만 안내한다
+        done+=(typeof data==='number'?data:part.length);
+        part.forEach(id=>{ const it=D.items.find(x=>x.id===id); if(it) it.checkedAt=at; });
+      }
+      bump('items'); return done;
     },
     // AI: Edge Function 'ai' 에 요청. 로그인 토큰은 supabase-js 가 자동으로 붙인다
     async ai(action,payload){
@@ -743,6 +784,15 @@ const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'�
 const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCats:[]};
 const ME={id:null,name:'',email:''};
 let store=null;
+/* AI 가 제안한 자료를 잠시 들고 있는다. 한 번 받는 데 하루 사용량 5회분이 드는데
+   창을 잘못 닫으면 그대로 날아가기 때문이다. 30분이 지나면 링크 점검 결과가 낡아 버린다. */
+let expCache=null;
+/* 아직 돌고 있는 자료 채우기 요청. 응답을 기다리는 동안 창을 닫았다 다시 열면 이걸 보고 이어 붙인다.
+   이게 없으면 30~60초짜리 요청이 허공으로 사라지고, 운영자는 5회분을 또 쓰게 된다. */
+let expPending=null;
+/* 몇 번째 요청·저장인지. 늦게 끝난 옛 작업이 새 결과를 덮어쓰지 못하게 막는 번호다.
+   요청을 새로 걸 때, 저장을 시작할 때, 계정이 바뀔 때 하나씩 올라간다. */
+let expGen=0;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=(p='i')=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -1347,52 +1397,108 @@ async function openCatOwners(){
 /* ---------- AI 정리 (운영자): 항목 재분류 + 분야 구조 개편안 ---------- */
 function openAiOrganize(){
   if(!aiReady()){ toast('운영자만 쓸 수 있습니다'); return; }
-  const empty=S.items.filter(i=>!i.category&&!i.example), vis=filtered().filter(i=>!i.example);
+  // 범위는 버튼을 누를 때 다시 센다. 창을 열어 둔 채 한 묶음을 처리하면 열 때 센 값이 낡는다.
+  const ago=n=>Date.now()-n*86400000;
+  function scopes(){
+    const real=S.items.filter(i=>!i.example);
+    const stale=d=>real.filter(i=>!i.checkedAt||new Date(i.checkedAt).getTime()<ago(d));
+    return {empty:real.filter(i=>!i.category), never:real.filter(i=>!i.checkedAt),
+      d30:stale(30), d7:stale(7), list:filtered().filter(i=>!i.example), all:real};
+  }
+  const sc=scopes();
+  // 분야 목록은 설정에 있는 것 + 자료에만 있는 것을 합친다 (왼쪽 사이드바와 같은 규칙)
+  const catCnt={}; sc.all.forEach(i=>{ if(i.category) catCnt[i.category]=(catCnt[i.category]||0)+1; });
+  const expCats=S.cats.map(c=>c.name);
+  Object.keys(catCnt).forEach(n=>{ if(!expCats.includes(n)) expCats.push(n); });
+  const expPre=(S.cat!=='all'&&expCats.includes(S.cat))?S.cat:(expCats[0]||'');
   modal(`${mh('✦ AI 정리')}<div class="modal-b">
     <div class="ai-sec">
       <h3>1. 항목 다시 분류</h3>
-      <p class="hint">AI 가 항목을 읽고 분야·하위분야·태그를 제안합니다. 바꿀 것만 표로 보여 주고, 체크한 항목만 적용됩니다. 30개씩 나눠 처리하며 한 묶음에 10~30초쯤 걸립니다.</p>
+      <p class="hint">AI 가 항목을 읽고 분야·하위분야·태그를 제안하고, <b>링크가 살아 있는지도 함께 확인</b>합니다. 바꿀 것만 표로 보여 주고 체크한 항목만 적용됩니다. 30개씩 나눠 처리하며 한 묶음에 10~30초쯤 걸립니다. 살펴본 항목에는 점검 시각이 남아, 다음에 "오래 확인 안 한 것"으로 골라낼 수 있습니다.</p>
       <div class="ai-opts">
-        <label><input type="radio" name="scope" value="empty" ${empty.length?'checked':''}> 분야가 비어 있는 항목 <b>${empty.length}</b></label>
-        <label><input type="radio" name="scope" value="list" ${empty.length?'':'checked'}> 지금 보이는 목록 <b>${vis.length}</b></label>
-        <label><input type="radio" name="scope" value="all"> 전체 <b>${S.items.filter(i=>!i.example).length}</b></label>
+        <label><input type="radio" name="scope" value="empty" ${sc.empty.length?'checked':''}> 분야가 비어 있는 것 <b>${sc.empty.length}</b></label>
+        <label><input type="radio" name="scope" value="never" ${!sc.empty.length&&sc.never.length?'checked':''}> 한 번도 확인 안 한 것 <b>${sc.never.length}</b></label>
+        <label><input type="radio" name="scope" value="d30"> 30일 넘게 확인 안 한 것 <b>${sc.d30.length}</b></label>
+        <label><input type="radio" name="scope" value="d7"> 7일 넘게 확인 안 한 것 <b>${sc.d7.length}</b></label>
+        <label><input type="radio" name="scope" value="list" ${!sc.empty.length&&!sc.never.length?'checked':''}> 지금 보이는 목록 <b>${sc.list.length}</b></label>
+        <label><input type="radio" name="scope" value="all"> 전체 <b>${sc.all.length}</b></label>
       </div>
-      <div class="ai-row"><button type="button" class="btn small" id="orgBtn">✦ 제안 받기</button><span class="hint" id="orgMsg"></span></div>
+      <div class="ai-row"><button type="button" class="btn small" id="orgBtn">✦ 제안 받기</button><span class="hint" id="orgMsg" aria-live="polite"></span></div>
       <div id="orgOut"></div>
     </div>
     <div class="ai-sec">
       <h3>2. 분야 구조 개편안</h3>
       <p class="hint">전체 자료를 보고 하위분야를 더하거나 빼는 안을 냅니다. 아래 칸에서 고친 뒤 저장하면 "분야 편집"과 같은 방식으로 반영됩니다.</p>
-      <div class="ai-row"><button type="button" class="btn small" id="taxBtn">✦ 제안 받기</button><span class="hint" id="taxMsg"></span></div>
+      <div class="ai-row"><button type="button" class="btn small" id="taxBtn">✦ 제안 받기</button><span class="hint" id="taxMsg" aria-live="polite"></span></div>
       <div id="taxOut"></div>
     </div>
+    <div class="ai-sec">
+      <h3>3. 분야에 자료 채우기</h3>
+      <p class="hint">고른 분야에 넣을 자료를 AI 가 제안합니다. 링크는 서버가 실제로 열어 보고, 이미 있는 자료와 겹치는지, 위험한 명령이 섞였는지도 확인합니다. <b>체크한 것만 추가됩니다.</b> 30초에서 1분쯤 걸리고 하루 AI 사용량 5회분을 씁니다(개수를 줄여도 같습니다). 창을 닫아도 요청은 그대로 진행되고, 받은 제안은 잠시 남아 있어 다시 열면 이어서 볼 수 있습니다.</p>
+      <div class="ai-fields">
+        <label class="fld">분야<select id="expCat">
+          ${expCats.map(n=>`<option value="${esc(n)}" ${n===expPre?'selected':''}>${esc(n)} (${catCnt[n]||0}개)</option>`).join('')}
+          <option value="__new">＋ 새 분야 직접 입력</option></select></label>
+        <label class="fld">주제 힌트 (선택)<input id="expTopic" maxlength="80" placeholder="예: 무료로 쓸 수 있는 것 위주"></label>
+        <label class="fld" id="expNewWrap" hidden>새 분야 이름<input id="expNew" maxlength="60" placeholder="예: 글쓰기·기획"></label>
+        <label class="fld" id="expSubWrap" hidden>하위분야 (선택, 쉼표로 구분)<input id="expSubs" maxlength="200" placeholder="예: 자료조사, 초고, 다듬기"></label>
+        <label class="fld">개수<select id="expCount"><option>5</option><option>8</option><option selected>10</option></select></label>
+        <label class="fld">종류 배합<select id="expMix">
+          <option value="link" selected>링크 위주</option><option value="even">고루 섞기</option><option value="text">메모·코드 위주</option></select></label>
+      </div>
+      <div class="ai-row"><button type="button" class="btn small" id="expBtn">✦ 제안 받기</button><span class="hint" id="expMsg" aria-live="polite"></span></div>
+      <div id="expOut"></div>
+    </div>
   </div><div class="modal-f"><button type="button" class="btn" data-close>닫기</button></div>`,'wide');
-  const veil=$('#veil'); let props=[];
+  const veil=$('#veil'); const alive=()=>document.body.contains(veil);   // 창을 닫으면 화면을 더 만지지 않는다
+  let props=[], links=[], exp=null;
   $('#orgBtn').addEventListener('click',async()=>{
     const scope=veil.querySelector('input[name=scope]:checked').value;
-    const ids=(scope==='empty'?empty:scope==='list'?vis:S.items.filter(i=>!i.example)).map(i=>i.id);
+    const now=scopes();                                  // 누른 시점으로 다시 센다
+    const ids=(now[scope]||now.all).map(i=>i.id);
     const msg=$('#orgMsg'), out=$('#orgOut'), btn=$('#orgBtn');
     if(!ids.length){ msg.textContent='대상 항목이 없습니다.'; return; }
-    btn.disabled=true; out.innerHTML=''; props=[]; let same=0, done=0;
-    const alive=()=>document.body.contains(veil);   // 창을 닫으면 더 부르지 않는다
+    btn.disabled=true; out.innerHTML=''; props=[]; links=[]; let same=0, done=0, markFail='';
     try{
       for(let i=0;i<ids.length;i+=30){
         if(!alive()) return;
         msg.textContent=`AI 가 검토하는 중… ${done}/${ids.length}`;
         const r=await store.ai('organize',{ids:ids.slice(i,i+30)});
-        (r.proposals||[]).forEach(p=>{ if(p.changed) props.push(p); else same++; });
+        (r.proposals||[]).forEach(p=>{
+          if(p.link&&p.link.state&&p.link.state!=='none'&&p.link.state!=='ok') links.push({id:p.id,...p.link});
+          if(p.changed) props.push(p); else same++;
+        });
+        // 묶음마다 바로 기록한다. 뒤에서 실패해도 이미 값을 치른 앞 묶음을 다시 검토하지 않도록.
+        if((r.checkedIds||[]).length){
+          try{ await store.markChecked(r.checkedIds); }
+          catch(e){ if(!markFail) markFail=e.message||'오류'; }   // 안내는 한 번만, 시도는 묶음마다
+        }
         done=Math.min(ids.length,i+30);
       }
       if(!alive()) return;
-      msg.textContent=`검토 완료: ${ids.length}개 중 ${props.length}개 변경 제안, ${same}개는 지금 분류가 적절합니다.`;
+      const dead=links.filter(l=>l.state==='dead').length, unk=links.filter(l=>l.state==='unknown').length;
+      msg.textContent=`검토 완료: ${ids.length}개 중 ${props.length}개 변경 제안, ${same}개는 지금 분류가 적절합니다.`
+        + (dead?` 링크 ${dead}개가 사라진 것 같습니다.`:'')
+        + (unk?` ${unk}개는 확인하지 못했습니다.`:'')
+        + (markFail?` (점검 시각은 남기지 못했습니다: ${markFail})`:'');
     }catch(x){ if(!alive()) return; msg.textContent='실패: '+(x.message||x.code||'오류')+(props.length?` (그 전까지 받은 ${props.length}개 제안은 아래에 있습니다)`:''); }
     renderProps(); btn.disabled=false;
   });
+  const LK={ok:['정상','ok'],dead:['없음','dead'],unknown:['확인 불가','unknown']};
+  function lkBadge(l){ if(!l||!l.state||l.state==='none'||!LK[l.state]) return '';
+    const [t,c]=LK[l.state]; return ' <span class="lk '+c+'" title="'+esc(l.note||'')+'">'+t+'</span>'; }
   function renderProps(){
-    const out=$('#orgOut'); if(!props.length){ out.innerHTML=''; return; }
-    out.innerHTML=`<div class="ai-wrap"><table class="ai-tbl"><tr><th><input type="checkbox" id="orgAll" checked></th><th>항목</th><th>지금</th><th>제안</th><th>이유</th></tr>${props.map((p,i)=>{ const c=byId(p.id);
-      return `<tr><td><input type="checkbox" data-pi="${i}" checked></td><td>${esc(c.title||p.id)}</td><td class="ai-old">${esc(c.category||'(없음)')}${c.sub?' › '+esc(c.sub):''}<br>${(c.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="ai-new">${esc(p.category)}${p.sub?' › '+esc(p.sub):''}${p.newSub?' <span class="ai-tag">새 하위분야</span>':''}<br>${(p.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="hint">${esc(p.reason||'')}</td></tr>` }).join('')}</table></div>
-      <div class="ai-row"><button type="button" class="btn primary small" id="orgApply">체크한 항목 적용</button><span class="hint" id="orgApplyMsg"></span></div>`;
+    const out=$('#orgOut');
+    // 분류 제안이 있든 없든, 링크에 문제가 있으면 따로 모아 보여 준다
+    const linkOnly=links.filter(l=>!props.some(p=>p.id===l.id));
+    const linkTbl=linkOnly.length?`<div class="ai-wrap"><table class="ai-tbl"><thead><tr><th>항목</th><th>링크</th><th>주소</th></tr></thead><tbody>${
+      linkOnly.map(l=>{ const c=byId(l.id); return `<tr><td>${esc(c.title||l.id)}</td><td>${lkBadge(l)}</td><td class="hint">${esc(c.url||'')}</td></tr>` }).join('')
+      }</tbody></table></div><p class="hint">분류는 그대로 두어도 됩니다. 위 링크는 직접 열어 확인한 뒤 고치거나 지우세요.</p>`:'';
+    if(!props.length){ out.innerHTML=linkTbl; return; }
+    out.innerHTML=`<div class="ai-row"><label class="hint" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="orgAll" checked aria-label="전체 선택"> 전체 선택</label></div>
+      <div class="ai-wrap"><table class="ai-tbl"><thead><tr><th>적용</th><th>항목</th><th>지금</th><th>제안</th><th>이유</th></tr></thead><tbody>${props.map((p,i)=>{ const c=byId(p.id);
+      return `<tr><td><input type="checkbox" data-pi="${i}" checked aria-label="적용 대상으로 선택: ${esc(c.title||p.id)}"></td><td>${esc(c.title||p.id)}${lkBadge(p.link)}</td><td class="ai-old">${esc(c.category||'(없음)')}${c.sub?' › '+esc(c.sub):''}<br>${(c.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="ai-new">${esc(p.category)}${p.sub?' › '+esc(p.sub):''}${p.newSub?' <span class="ai-tag">새 하위분야</span>':''}<br>${(p.tags||[]).map(t=>'#'+esc(t)).join(' ')}</td><td class="hint">${esc(p.reason||'')}</td></tr>` }).join('')}</tbody></table></div>
+      <div class="ai-row"><button type="button" class="btn primary small" id="orgApply">체크한 항목 적용</button><span class="hint" id="orgApplyMsg" aria-live="polite"></span></div>${linkTbl}`;
     $('#orgAll').addEventListener('change',e=>out.querySelectorAll('[data-pi]').forEach(c=>c.checked=e.target.checked));
     $('#orgApply').addEventListener('click',async()=>{
       const sel=[...out.querySelectorAll('[data-pi]:checked')].map(c=>props[+c.dataset.pi]); const m=$('#orgApplyMsg');
@@ -1403,10 +1509,13 @@ function openAiOrganize(){
       const merged=S.cats.map(c=>({...c,subs:c.subs.slice()})); let added=0;
       sel.forEach(p=>{ if(!p.sub) return; const c=merged.find(x=>x.name===p.category); if(c&&!c.subs.includes(p.sub)){ c.subs.push(p.sub); added++; } });
       if(added){ try{ await store.saveCategories(merged); }catch(x){ added=0; } }
-      m.textContent=`완료: ${ok}개 적용${fail?`, ${fail}개 실패`:''}${added?`, 하위분야 ${added}개 추가`:''}`;
+      const line=`완료: ${ok}개 적용${fail?`, ${fail}개 실패`:''}${added?`, 하위분야 ${added}개 추가`:''}`;
+      m.textContent=line;
       toast(`${ok}개 항목을 다시 분류했습니다`);
-      props=props.filter(p=>!sel.includes(p)); if(!props.length){ $('#orgMsg').textContent=m.textContent; out.innerHTML=''; }
-      else renderProps();
+      props=props.filter(p=>!sel.includes(p));
+      if(!props.length) $('#orgMsg').textContent=line;   // 남은 링크 문제 표는 renderProps 가 다시 그린다
+      renderProps();
+      const m2=$('#orgApplyMsg'); if(m2) m2.textContent=line;   // 다시 그리면서 안내가 지워지지 않도록
     });
   }
   $('#taxBtn').addEventListener('click',async()=>{
@@ -1427,13 +1536,231 @@ function openAiOrganize(){
     }catch(x){ msg.textContent='실패: '+(x.message||x.code||'오류'); }
     btn.disabled=false;
   });
+
+  /* ---------- 3. 분야에 자료 채우기 ---------- */
+  const NEEDNAME='자료를 올리려면 이름이 필요합니다. "더 보기 › 이름 바꾸기"에서 먼저 정해 주세요.';
+  // 서버가 막은 것과 이 사이트의 저장 조건을 못 넘는 것은 아예 고를 수 없게 한다
+  const expBad=p=> p.risk==='block' || !p.title || (p.type!=='link'&&!p.body) || (p.type==='link'&&!safeUrl(p.url));
+  const expBadWhy=p=> p.risk==='block' ? '되돌릴 수 없는 명령이 들어 있어 추가할 수 없습니다. 필요하면 아래 내용을 보고 "새 항목"으로 직접 올려 주세요.'
+    : !p.title ? '제목이 비어 있어 추가할 수 없습니다.'
+    : p.type==='snippet' ? '코드가 비어 있어 추가할 수 없습니다.'
+    : p.type==='note' ? '내용이 비어 있어 추가할 수 없습니다.'
+    : '열 수 없는 주소라 추가할 수 없습니다.';
+  // 기본으로 켜 두는 조건. 중복과 죽은 링크는 꺼 두고, "확인 불가" 는 켜 둔다 —
+  // 서버는 404·없는 주소만 '없음' 으로 찍고, 봇을 막는 멀쩡한 사이트가 '확인 불가' 로 오기 때문이다.
+  const expSafe=p=> !expBad(p) && p.risk!=='warn' && (p.dup||'none')==='none' && !(p.link&&p.link.state==='dead');
+  const DUPW={url:'같은 주소의 자료가 이미 있습니다.',title:'제목이 같은 자료가 이미 있습니다.',batch:'이번 제안 안에서 앞의 것과 겹칩니다.'};
+  const DUPB={url:'이미 있는 주소',title:'제목이 같음',batch:'제안 안에서 겹침'};
+  const expWarn=p=>{ const a=[];
+    if(p.risk==='warn') a.push('되돌릴 수 없는 명령이 글 안에 들어 있습니다. 설명하는 글인지 읽어 보고 고르세요.');
+    if(DUPW[p.dup]) a.push(DUPW[p.dup]);
+    if(p.link&&p.link.state==='dead') a.push((p.link.note||'주소가 열리지 않습니다')+'. 직접 확인한 뒤 추가해 주세요.');
+    if(p.link&&p.link.state==='unknown') a.push((p.link.note||'확인하지 못했습니다')+'. 주소를 눌러 열어 보고 판단해 주세요.');
+    return a; };
+  const expSummary=r=>{
+    const g=r.mixGot||{}, it=exp.items, parts=[];
+    if(g.link) parts.push(`링크 ${g.link}`); if(g.note) parts.push(`메모 ${g.note}`); if(g.snippet) parts.push(`코드 ${g.snippet}`);
+    const cnt=f=>it.filter(f).length;
+    const dead=cnt(p=>p.link&&p.link.state==='dead'), unk=cnt(p=>p.link&&p.link.state==='unknown');
+    const dup=cnt(p=>!expBad(p)&&(p.dup||'none')!=='none'), blk=cnt(expBad), warn=cnt(p=>!expBad(p)&&p.risk==='warn');
+    return `제안 ${it.length}개${parts.length?` (${parts.join(' · ')})`:''}.`
+      + (r.dropped?` ${r.dropped}개는 주소나 내용이 비어 있어 서버가 걸렀습니다.`:'')
+      + (dead?` 링크 ${dead}개가 사라진 것 같습니다.`:'')
+      + (unk?` ${unk}개는 확인하지 못했습니다 — 눌러서 직접 열어 보세요.`:'')
+      + (dup?` 이미 있는 것과 겹치는 ${dup}개는 체크를 꺼 두었습니다.`:'')
+      + (blk?` 위험하거나 저장할 수 없는 ${blk}개는 고를 수 없습니다.`:'')
+      + (warn?` 명령이 들어 있는 ${warn}개는 체크를 꺼 두었습니다 — 설명하는 글인지 읽어 보세요.`:'')
+      + (it.length&&!it.some(expSafe)?' 기본으로 켜진 것이 없습니다. 내용을 보고 직접 골라 주세요.':'');
+  };
+
+  function expToggle(focus){
+    const isNew=$('#expCat').value==='__new';
+    $('#expNewWrap').hidden=!isNew; $('#expSubWrap').hidden=!isNew;
+    if(isNew&&focus) $('#expNew').focus();
+  }
+  $('#expCat').addEventListener('change',()=>expToggle(true));
+  expToggle(false);      // 분야가 하나도 없으면 처음부터 "새 분야" 칸이 열려 있어야 한다
+
+  // 아직 돌고 있는 요청이 있으면 그 결과를 이 창에 이어 붙인다
+  if(expPending) expAttach(expPending);
+  // 지난번에 받아 둔 제안이 남아 있으면 이어서 볼 수 있게 한다 (한 번 받는 데 5회분이 든다)
+  else if(expCache&&expCache.items.length&&Date.now()-expCache.at<1800000){
+    $('#expMsg').innerHTML=`조금 전 받은 제안 ${expCache.items.length}개가 남아 있습니다. `
+      +`<button type="button" class="btn small" id="expResume">이어서 보기</button> `
+      +`<button type="button" class="btn small ghost" id="expDrop">버리기</button>`;
+    $('#expResume').addEventListener('click',()=>{
+      if(!expCache||!expCache.items.length){ $('#expMsg').textContent='남아 있던 제안이 사라졌습니다. 다시 받아 주세요.'; return; }
+      exp={cat:expCache.cat,isNew:expCache.isNew,items:expCache.items};
+      if([...$('#expCat').options].some(o=>o.value===exp.cat)) $('#expCat').value=exp.cat;
+      $('#expMsg').textContent=`제안 ${exp.items.length}개를 이어서 봅니다.`; renderExp();
+    });
+    $('#expDrop').addEventListener('click',()=>{ expCache=null; $('#expMsg').textContent=''; });
+  }else expCache=null;      // 30분이 지나면 링크 점검 결과가 낡았으므로 버린다
+
+  // 돌고 있는 요청에 화면을 붙인다. 창을 닫았다 다시 열어도 같은 함수로 이어 붙는다.
+  function expAttach(pend){
+    const msg=$('#expMsg'), btn=$('#expBtn');
+    btn.disabled=true;
+    msg.textContent=`AI 가 "${pend.cat}" 에 넣을 자료를 찾는 중… (30초에서 1분쯤 걸립니다)`;
+    if([...$('#expCat').options].some(o=>o.value===pend.cat)) $('#expCat').value=pend.cat, expToggle(false);
+    pend.p.then(res=>{
+      if(expPending===pend) expPending=null;
+      if(!alive()) return;
+      btn.disabled=false;
+      // 그 사이 계정이 바뀌었거나 다른 요청이 시작됐으면 이 결과는 버린다
+      if(res.gen!==expGen){ msg.textContent='그 사이 다른 일이 있어 이 결과는 쓰지 않았습니다.'; return; }
+      if(res.err){ msg.textContent='실패: '+(res.err.message||res.err.code||'오류'); return; }
+      if(!res.items.length){ msg.textContent='제안을 받지 못했습니다. 주제 힌트를 조금 더 구체적으로 적고 다시 시도해 주세요. (이번 시도에도 사용량 5회분은 차감됩니다)'; return; }
+      exp={cat:res.cat,isNew:res.isNew,items:res.items};
+      msg.textContent=expSummary(res.r);
+      renderExp();
+    });
+  }
+
+  $('#expBtn').addEventListener('click',()=>{
+    const msg=$('#expMsg'), out=$('#expOut');
+    // 이름은 먼저 본다. ensureName() 은 부를 수 없다 — 이름 창이 이 창을 갈아치워 제안이 사라진다.
+    if(!ME.name){ msg.textContent=NEEDNAME; return; }
+    if(expPending){ expAttach(expPending); return; }
+    const raw=$('#expCat').value, pickNew=raw==='__new';
+    let cat=raw, subs=null;
+    if(pickNew){
+      cat=$('#expNew').value.trim();
+      if(!cat){ msg.textContent='새 분야 이름을 적어 주세요.'; $('#expNew').focus(); return; }
+      if(/[:：,，]/.test(cat)){ msg.textContent='분야 이름에는 쉼표와 콜론을 쓸 수 없습니다. 하위분야를 나누는 기호라서 그렇습니다.'; return; }
+      if(expCats.includes(cat)){ msg.textContent='이미 있는 분야입니다. 위 목록에서 골라 주세요.'; $('#expCat').value=cat; expToggle(false); return; }
+      subs=$('#expSubs').value.split(/[,，]/).map(s=>s.replace(/[:：]/g,' ').trim()).filter(Boolean).slice(0,12).map(s=>s.slice(0,60));
+    }
+    out.innerHTML=''; exp=null; expCache=null;
+    const gen=++expGen;
+    // 결과를 받아 캐시에 넣는 일은 창과 상관없이 이 약속(Promise) 안에서 끝낸다
+    const req=store.ai('expand',{category:cat,topic:$('#expTopic').value.trim(),
+      count:+$('#expCount').value, mix:$('#expMix').value, ...(pickNew?{subs}:{})})
+      .then(r=>{
+        const items=(r.items||[]).map(x=>({...x})), got={r,items,gen,cat:r.category||cat,isNew:!!r.isNew};
+        if(gen===expGen&&items.length) expCache={cat:got.cat,isNew:got.isNew,items,at:Date.now()};
+        return got;
+      },e=>({err:e,items:[],cat,gen}));
+    expPending={cat,p:req,gen};
+    expAttach(expPending);
+  });
+
+  function renderExp(){
+    const out=$('#expOut');
+    if(!exp||!exp.items.length){ out.innerHTML=''; return; }
+    const known=new Set((S.cats.find(x=>x.name===exp.cat)||{subs:[]}).subs);
+    S.items.forEach(i=>{ if(i.category===exp.cat&&i.sub) known.add(i.sub); });
+    out.innerHTML=`<div class="ai-row">
+        <label class="hint" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="expAll" aria-label="전체 선택"> 전체 선택</label>
+        <button type="button" class="btn ghost small" id="expSafeBtn">안전한 것만</button>
+        <span class="hint" id="expSel"></span></div>
+      <div class="ai-wrap" id="expList">${exp.items.map((p,i)=>{
+        const no=expBad(p), su=p.type==='link'?safeUrl(p.url):'', warn=expWarn(p);
+        return `<div class="ai-card${no?' blocked':''}">
+          <label class="ai-card-h">
+            <input type="checkbox" data-xi="${i}" ${no?'disabled':((p.pick===undefined?expSafe(p):p.pick)?'checked':'')} aria-label="추가 대상으로 선택: ${esc(p.title||'')}">
+            <span class="kind ${esc(p.type)}">${esc((TYPES[p.type]||{k:'?'}).k)}</span>
+            <b>${esc(p.title||'(제목 없음)')}</b>${lkBadge(p.link)}${DUPB[p.dup]?`<span class="chip warn">${DUPB[p.dup]}</span>`:''}${p.risk==='block'?'<span class="chip warn">위험한 명령</span>':p.risk==='warn'?'<span class="chip warn">명령 언급</span>':''}${p.err?'<span class="chip warn">저장 실패</span>':''}
+          </label>
+          <div class="ai-card-m">
+            <span class="chip cat">${esc(exp.cat)}${p.sub?' › '+esc(p.sub):''}</span>${(p.sub&&!known.has(p.sub))?'<span class="ai-tag">새 하위분야</span>':''}
+            ${(p.tags||[]).map(t=>`<span class="chip">#${esc(t)}</span>`).join('')}
+            ${su?`<a class="chip" href="${esc(su)}" target="_blank" rel="noopener">${esc(host(p.url)||p.url)} ↗</a>`:''}
+          </div>
+          ${p.reason?`<div class="hint">✦ ${esc(p.reason)}</div>`:''}
+          ${p.body?`<div class="ai-prev${p.type==='snippet'?' code':''}">${esc(p.body)}</div>`:''}
+          ${no?`<div class="hint ai-bad">${esc(expBadWhy(p))}</div>`:warn.map(w=>`<div class="hint">${esc(w)}</div>`).join('')}
+          ${p.err?`<div class="hint ai-bad">저장하지 못했습니다 (${esc(p.err)}). 다시 시도할 수 있습니다.</div>`:''}
+        </div>`; }).join('')}</div>
+      <div class="ai-row"><label class="hint" style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="expTag" checked> 추가할 때 <b>#ai제안</b> 태그 붙이기</label></div>
+      <div class="ai-row"><button type="button" class="btn primary small" id="expAdd">선택한 자료 추가</button>
+        <span class="hint" id="expAddMsg" aria-live="polite"></span></div>`;
+    const list=$('#expList'), all=$('#expAll'), num=$('#expSel');
+    const boxes=()=>[...list.querySelectorAll('[data-xi]')];
+    const sync=()=>{ const b=boxes(), free=b.filter(x=>!x.disabled), on=b.filter(x=>x.checked).length;
+      b.forEach(x=>{ const p=exp.items[+x.dataset.xi]; if(p&&!x.disabled) p.pick=x.checked; });
+      num.textContent=`${exp.items.length}개 중 ${on}개 선택`+(b.length-free.length?` (${b.length-free.length}개는 고를 수 없음)`:'');
+      all.checked=on>0&&on===free.length; all.indeterminate=on>0&&!all.checked; };
+    all.addEventListener('change',e=>{ boxes().forEach(x=>{ if(!x.disabled) x.checked=e.target.checked; }); sync(); });
+    $('#expSafeBtn').addEventListener('click',()=>{ boxes().forEach(x=>{ if(!x.disabled) x.checked=expSafe(exp.items[+x.dataset.xi]); }); sync(); });
+    list.addEventListener('change',sync);
+    sync();
+    $('#expAdd').addEventListener('click',expAdd);
+  }
+
+  async function expAdd(){
+    const out=$('#expOut'), m=$('#expAddMsg');
+    if(!exp||!exp.items.length){ m.textContent='추가할 제안이 없습니다.'; return; }
+    // 지금 켜고 끈 상태를 항목에 적어 둔다. 다시 그릴 때 운영자가 끈 것이 되살아나지 않도록.
+    out.querySelectorAll('[data-xi]').forEach(c=>{ const p=exp.items[+c.dataset.xi]; if(p&&!c.disabled) p.pick=c.checked; });
+    const sel=[...out.querySelectorAll('[data-xi]:checked')].map(c=>exp.items[+c.dataset.xi]).filter(p=>!expBad(p));
+    if(!sel.length){ m.textContent='선택한 자료가 없습니다.'; return; }
+    if(!ME.name){ m.textContent=NEEDNAME; return; }
+    // 저장하는 동안에는 "제안 받기" 도 막는다. 도중에 새 요청이 들어오면 exp 가 갈려 루프가 죽는다.
+    $('#expAdd').disabled=true; $('#expBtn').disabled=true;
+    out.querySelectorAll('input[type=checkbox]').forEach(c=>c.disabled=true);
+    // 저장하는 동안에는 캐시를 비운다. 이때 창을 닫고 다시 열어 "이어서 보기" 를 누르면
+    // 방금 들어간 자료를 한 벌 더 넣게 된다. 남은 것은 끝에서 다시 담는다.
+    const keepAt=(expCache&&expCache.at)||Date.now(), gen=++expGen;
+    expCache=null;
+    const extra=$('#expTag').checked?['ai제안']:[];
+    const now=new Date().toISOString(), done=[];
+    let ok=0, bad=0;
+    // 자료를 먼저 넣는다. 분야를 먼저 만들면 저장이 다 실패했을 때 빈 분야만 남는다.
+    for(const p of sel){
+      const item={
+        id:uid(), type:p.type, title:p.title,
+        url:p.type==='link'?safeUrl(p.url):'',
+        lang:p.type==='snippet'?(p.lang||''):'',
+        body:(p.body||'').replace(/\s+$/,''),
+        category:exp.cat, sub:(p.sub||'').trim(),
+        tags:[...new Set([...(p.tags||[]).map(t=>String(t).replace(/^#/,'').trim()).filter(Boolean),...extra])].slice(0,20),
+        votes:0, by:ME.name, ownerId:ME.id, createdAt:now,
+      };
+      try{ await store.put(item); ok++; p.err=null; done.push(item); }
+      catch(x){ bad++; p.err=x.message||x.code||'오류'; }
+      if(alive()) m.textContent=`추가 중… ${ok+bad}/${sel.length}`;
+    }
+    // 분야·하위분야는 성공한 것만 모아 마지막에 한 번 반영한다 (목록 전체를 덮어쓰는 호출이라서)
+    let catMsg='';
+    if(ok){
+      const merged=S.cats.map(c=>({...c,subs:c.subs.slice()}));
+      let t=merged.find(c=>c.name===exp.cat), newCat=false, newSub=0;
+      if(!t){ t={name:exp.cat,subs:[]}; merged.push(t); newCat=true; }
+      done.forEach(it=>{ if(it.sub&&!t.subs.includes(it.sub)){ t.subs.push(it.sub); newSub++; } });
+      if(newCat||newSub){
+        try{ await store.saveCategories(merged);
+          catMsg=(newCat?`, 새 분야 "${exp.cat}" 를 만들었습니다`:'')+(newSub?`, 하위분야 ${newSub}개 추가`:'');
+        }catch(x){ catMsg=', 분야 목록에는 반영하지 못했습니다'; }
+      }
+    }
+    if(ok) toast(`자료 ${ok}개를 추가했습니다`);
+    exp.items=exp.items.filter(p=>!(sel.includes(p)&&!p.err));   // 들어간 것만 목록에서 뺀다
+    // 저장이 도는 사이 다른 요청이 캐시를 차지했으면 건드리지 않는다. 시각도 처음 받은 때 그대로 둔다.
+    if(gen===expGen) expCache=exp.items.length?{...exp,at:keepAt}:null;
+    if(alive()) $('#expBtn').disabled=false;
+    if(!alive()) return;
+    const line=`완료: ${ok}개 추가${bad?`, ${bad}개 실패`:''}${catMsg}`;
+    if(!exp.items.length){
+      $('#expOut').innerHTML='';
+      $('#expMsg').innerHTML=esc(line)+' <button type="button" class="btn small" id="expGo">이 분야 보기</button>';
+      const go=exp.cat;
+      $('#expGo').addEventListener('click',()=>{
+        Object.assign(S,{q:'',type:'all',cat:go,sub:null,tag:null,col:null,mine:false,sel:null,cursor:-1,view:'list'});
+        $('#q').value='';
+        if(!S.openCats.includes(go)){ S.openCats=[...S.openCats,go]; LS.set('toolbox.openCats',S.openCats); }
+        expCache=null; closeModal(); render();
+      });
+    }else{ renderExp(); $('#expAddMsg').textContent=line+(bad?'. 실패한 것은 다시 누를 수 있습니다.':'. 남은 것은 그대로 두거나 다시 골라 추가하세요.'); }
+  }
 }
 
 function openMore(){
   modal(`${mh('더 보기')}<div class="modal-b"><div class="menu">
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
     ${S.admin?`<button data-m="owners">분야 주 관리자 <small>분야마다 담당자 지정</small></button>`:''}
-    ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 제안</small></button>`:''}
+    ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 · 자료 채우기</small></button>`:''}
     ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
     <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개</div>
@@ -1508,7 +1835,18 @@ render();
   const ready=CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase;
   store=ready?SupabaseStore():LocalStore();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
-  store.onAuth(me=>{ Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||'',suggestedName:me.suggestedName||''}); S.admin=!!me.admin; render(); });
+  store.onAuth(me=>{
+    // 계정이 바뀌면 앞 사람이 받아 둔 AI 제안을 넘기지 않는다 (제안에는 그 사람이 준 주제 힌트가 섞여 있다).
+    // 화면에 남은 목록과 버튼까지 지운다. 캐시만 비우면 "이어서 보기" 가 눌리는 죽은 버튼으로 남는다.
+    if(ME.id&&ME.id!==me.id){
+      expCache=null; expPending=null; expGen++;
+      const em=$('#expMsg'), eo=$('#expOut');
+      if(em) em.textContent='계정이 바뀌어 이전 제안을 지웠습니다.';
+      if(eo) eo.innerHTML='';
+    }
+    Object.assign(ME,{id:me.id,name:me.name,email:me.email,provider:me.provider||'',suggestedName:me.suggestedName||''});
+    S.admin=!!me.admin; render();
+  });
   S.openCats=(LS.get('toolbox.openCats',[])||[]).filter(x=>typeof x==='string');
   store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도

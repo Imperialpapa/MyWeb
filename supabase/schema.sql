@@ -94,7 +94,14 @@ create table if not exists public.items (
   created_at timestamptz not null default now(),
   updated_at timestamptz
 );
+-- checked_at: AI 정리로 마지막으로 살펴본 시각. 고칠 게 없다고 판단한 경우에도 기록한다.
+-- 이게 없으면 이미 확인한 자료를 매번 다시 검토해 AI 비용이 계속 나간다.
+alter table public.items add column if not exists checked_at timestamptz;
+
 create index if not exists items_created_idx on public.items (created_at desc);
+-- 지금은 브라우저가 items 를 통째로 받아 메모리에서 거르므로 이 인덱스를 타는 질의가 없다.
+-- 자료가 많아져 "오래 확인 안 한 것" 을 서버에서 골라 오게 되면 그때 쓰인다.
+create index if not exists items_checked_idx on public.items (checked_at nulls first);
 create index if not exists items_owner_idx on public.items (owner_id);
 create index if not exists items_category_idx on public.items (category, sub);
 
@@ -235,31 +242,47 @@ create table if not exists public.ai_usage (
 );
 alter table public.ai_usage enable row level security;   -- 정책 없음 = 아무도 직접 못 본다 (아래 함수로만 접근)
 
--- 오늘 사용량을 1 늘리고, 한도 안이면 true. Edge Function 이 AI 호출 전에 부른다.
-create or replace function public.ai_take_quota(lim integer)
+-- 아래 함수들의 revoke 에 anon 을 함께 적는 이유:
+-- Supabase 는 public 스키마의 새 함수에 anon·authenticated 실행 권한을 기본으로 준다(ALTER DEFAULT PRIVILEGES).
+-- 그래서 "from public" 만 걷으면 anon 에게 준 권한은 그대로 남아, 로그인하지 않은 사람도 부를 수 있다.
+-- (함수 안에서 auth.uid() 를 먼저 보므로 실제 피해는 없었지만, 막으려던 것이 안 막혀 있었다.)
+
+-- 오늘 사용량을 cost 만큼 늘리고, 한도 안이면 true. Edge Function 이 AI 호출 전에 부른다.
+-- cost 는 그 작업이 얼마나 비싼지다. 자료 10개 제안은 분류 제안보다 훨씬 비싸므로 5로 센다.
+-- 인자 하나짜리 옛 함수는 반드시 먼저 지운다. 남겨 두면 호출이 모호해져 PGRST203 으로 전부 실패한다.
+drop function if exists public.ai_take_quota(integer);
+create or replace function public.ai_take_quota(lim integer, cost integer default 1)
 returns boolean language plpgsql security definer set search_path = public as $$
-declare cur integer;
+declare cur integer; c integer := greatest(coalesce(cost, 1), 1);
 begin
   if auth.uid() is null then return false; end if;
-  insert into public.ai_usage (user_id, day, n) values (auth.uid(), current_date, 1)
-    on conflict (user_id, day) do update set n = public.ai_usage.n + 1
+  insert into public.ai_usage (user_id, day, n) values (auth.uid(), current_date, c)
+    on conflict (user_id, day) do update set n = public.ai_usage.n + c
     returning n into cur;
-  return cur <= lim;
+  -- 한도를 넘었으면 방금 더한 만큼 되돌린다. 안 그러면 한도에 걸린 사람이 다시 누를 때마다
+  -- 쓰지도 않은 사용량이 계속 쌓여 숫자가 실제와 멀어진다.
+  if cur > lim then
+    update public.ai_usage set n = greatest(n - c, 0)
+     where user_id = auth.uid() and day = current_date;
+    return false;
+  end if;
+  return true;
 end $$;
-revoke all on function public.ai_take_quota(integer) from public;
-grant execute on function public.ai_take_quota(integer) to authenticated;
+revoke all on function public.ai_take_quota(integer, integer) from public, anon;
+grant execute on function public.ai_take_quota(integer, integer) to authenticated;
 
 -- 호출이 우리 쪽(키 만료·네트워크·서버) 이유로 실패하면 차감한 횟수를 돌려준다.
 -- 이게 없으면 키가 죽어 있는 동안 실패한 호출까지 사용자의 하루 한도를 깎는다.
-create or replace function public.ai_refund_quota()
+drop function if exists public.ai_refund_quota();
+create or replace function public.ai_refund_quota(cost integer default 1)
 returns void language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then return; end if;
-  update public.ai_usage set n = greatest(n - 1, 0)
+  update public.ai_usage set n = greatest(n - greatest(coalesce(cost, 1), 1), 0)
    where user_id = auth.uid() and day = current_date;
 end $$;
-revoke all on function public.ai_refund_quota() from public;
-grant execute on function public.ai_refund_quota() to authenticated;
+revoke all on function public.ai_refund_quota(integer) from public, anon;
+grant execute on function public.ai_refund_quota(integer) to authenticated;
 
 -- ---------- id 형식 제약 (id 가 화면 HTML 속성에 들어가므로 서버에서 막는다) ----------
 -- 이미 운영 중인 DB 라면 먼저 아래로 어긋나는 행이 없는지 확인하세요. 있으면 그 행을 고친 뒤 실행합니다.
@@ -287,6 +310,24 @@ alter table public.items add  constraint items_len check (
 revoke update on public.items from authenticated, anon;
 grant  update (type, title, url, lang, body, category, sub, tags, by, owner_id, updated_at)
   on public.items to authenticated;
+
+-- checked_at 은 운영자·주 관리자가 "살펴봤다" 고 남기는 부기 값이다. 컬럼 쓰기 권한을 주면
+-- 누구나 자기 자료의 점검 시각을 미래로 찍어 검토 대기열에서 스스로 빠질 수 있으므로 함수로만 찍는다.
+create or replace function public.mark_checked(ids text[])
+returns integer language plpgsql security definer set search_path = public as $$
+declare n integer;
+begin
+  if auth.uid() is null then return 0; end if;
+  if ids is null or array_length(ids, 1) is null then return 0; end if;
+  if array_length(ids, 1) > 500 then raise exception '한 번에 500개까지만 표시할 수 있습니다'; end if;
+  update public.items set checked_at = now()
+   where id = any(ids)
+     and (public.is_admin() or public.manages_category(category));
+  get diagnostics n = row_count;
+  return n;
+end $$;
+revoke all on function public.mark_checked(text[]) from public, anon;
+grant execute on function public.mark_checked(text[]) to authenticated;
 
 -- ---------- 실시간 반영 ----------
 do $$

@@ -5,6 +5,7 @@
 //   suggest  : 새 항목 하나의 분야·하위분야·태그(·제목·설명) 제안   — 로그인 사용자
 //   organize : 여러 항목(최대 30개)을 다시 분류해 바꿀 것만 제안     — 운영자
 //   taxonomy : 전체 자료를 보고 분야·하위분야 구조 개편안 제안        — 운영자
+//   expand   : 고른 분야에 넣을 자료를 새로 제안 (링크 생존·중복·위험 명령은 서버가 검증) — 운영자
 // 이 함수는 데이터베이스를 읽기만 한다. 적용(쓰기)은 브라우저가 사용자 권한(RLS)으로 한다.
 //
 // 배포:  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
@@ -17,12 +18,30 @@ const MODEL = "claude-opus-5";
 const MAX_ORGANIZE = 30;      // 한 번에 다시 분류할 항목 수 (브라우저가 이 크기로 나눠 부른다)
 const MAX_TAXONOMY_ITEMS = 1500;
 const MAX_BODY_BYTES = 32_000;   // 요청 본문 상한
-const DAILY_LIMIT = { user: 40, admin: 600 };   // 하루 AI 호출 횟수 (organize 는 배치 1건 = 1회)
+const DAILY_LIMIT = { user: 40, admin: 600 };   // 하루 AI 사용량 (아래 ACTION_COST 로 가중)
+// 작업마다 비용이 다르다. 자료 10개를 만들어 내는 expand 는 분류 제안보다 훨씬 비싸다.
+const ACTION_COST: Record<string, number> = { suggest: 1, organize: 1, taxonomy: 2, expand: 5 };
+const MAX_EXPAND = 10;           // 한 번에 제안할 자료 수 상한
+const LINK_TIMEOUT_MS = 6000;    // 링크 하나를 기다리는 시간
+const LINK_CONCURRENCY = 6;      // 동시에 두드릴 링크 수
+// 상대 서버가 우리를 알아보고 막거나 허용할 수 있게 신분을 밝힌다 (헤더 값은 ASCII 만 들어간다)
+const LINK_UA = "quickref-linkcheck/1.0 (+https://my-web-imperialpapas-projects.vercel.app)";
 // 텍스트 필드 상한 (프롬프트 길이 = 비용이므로 서버에서 자른다)
-const CAP = { title: 200, url: 500, lang: 40, body: 1200, category: 60, sub: 60, tag: 40, tags: 10, hint: 30 };
+const CAP = { title: 200, url: 500, lang: 40, body: 1200, category: 60, sub: 60, tag: 40, tags: 10, hint: 30, topic: 80 };
 const cut = (v: unknown, n: number) => String(v ?? "").slice(0, n);
 const cutArr = (v: unknown, n: number, each: number) =>
   (Array.isArray(v) ? v : []).slice(0, n).map((x) => cut(x, each)).filter(Boolean);
+// 프롬프트 안에 넣을 사용자 글은 줄바꿈과 머리글 기호를 없앤다.
+// 안 그러면 남이 올린 제목 한 줄로 시스템 프롬프트의 "## 절" 을 위조할 수 있다.
+const flat = (v: unknown, n: number) =>
+  cut(v, n).replace(/[\r\n\u2028\u2029]+/g, " ").replace(/^[\s#>*\-]+/, "").replace(/\s{2,}/g, " ").trim();
+// 태그 모양 맞추기: # 과 공백을 빼고, 영문·숫자만인 태그는 소문자로 (SITE_RULES 와 같은 규칙)
+const normTags = (v: unknown) => [...new Set(
+  cutArr(v, CAP.tags, CAP.tag)
+    .map((t) => t.replace(/^#+/, "").replace(/\s+/g, ""))
+    .map((t) => (/^[A-Za-z0-9._+-]+$/.test(t) ? t.toLowerCase() : t))
+    .filter(Boolean),
+)];
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -69,6 +88,133 @@ function topTags(rows: { tags?: string[] }[], n = 40) {
   return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, n).map(([t]) => t);
 }
 
+// ---------- 링크 점검 ----------
+// 결과를 세 등급으로만 나눈다. "죽었다" 고 단정해 자동으로 버리지 않는다.
+// 멀쩡한 사이트가 자동 접속을 막거나(403) 인증서 문제로 실패하는 경우가 흔하기 때문이다.
+type LinkState = "ok" | "dead" | "unknown" | "none";
+type LinkCheck = { state: LinkState; status: number; note: string };
+
+// 이 서버가 남의 사내망을 대신 열어 보는 통로가 되면 안 된다.
+// 자료의 url 은 로그인한 사람이면 누구나 써 넣을 수 있으므로 두드리기 전에 목적지를 따진다.
+// (이름이 부를 때마다 다른 주소로 풀리는 공격까지는 막지 못한다. 이 규모에서 치를 값이 아니다.)
+function unsafeTarget(u: URL): string {
+  if (!/^https?:$/i.test(u.protocol)) return "웹 주소가 아닙니다";
+  if (u.port && u.port !== "80" && u.port !== "443") return "확인하지 않는 포트입니다";
+  // 끝점을 붙인 이름(example.com.)도 같은 곳을 가리키므로 떼고 본다
+  let h = u.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+  if (h === "localhost" || /\.(local|internal|localhost)$/.test(h) || /\.home\.arpa$/.test(h)) return "안쪽 망 주소입니다";
+  // IPv6 는 같은 주소를 적는 방법이 여러 가지라 위험한 것만 골라 막을 수 없다.
+  // ::ffff:7f00:1 처럼 IPv4 를 감싼 것만 되돌려 아래 규칙에 태우고, 나머지 리터럴은 통째로 거절한다.
+  if (h.includes(":")) {
+    const m6 = h.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (!m6) return "확인하지 않는 주소입니다";
+    const num = parseInt(m6[1], 16) * 65536 + parseInt(m6[2], 16);
+    h = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join(".");
+  }
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const a = Number(v4[1]), b = Number(v4[2]);
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return "안쪽 망 주소입니다";
+    if (a === 172 && b >= 16 && b <= 31) return "안쪽 망 주소입니다";
+    if (a === 192 && b === 168) return "안쪽 망 주소입니다";
+    if (a === 169 && b === 254) return "안쪽 망 주소입니다";   // 클라우드 메타데이터
+    if (a === 100 && b >= 64 && b <= 127) return "안쪽 망 주소입니다";
+  }
+  return "";
+}
+
+async function checkLink(url: string): Promise<LinkCheck> {
+  if (!/^https?:\/\//i.test(url)) return { state: "none", status: 0, note: "" };
+  let target: URL;
+  try { target = new URL(url); } catch { return { state: "dead", status: 0, note: "주소 형식이 잘못됐습니다" }; }
+  // 옮겨 가는 걸음마다 따로 세면 링크 하나가 24초를 쓸 수 있다. 전체 시간에 상한을 둔다.
+  const deadline = Date.now() + LINK_TIMEOUT_MS * 2;
+  // 옮겨 가는 주소(3xx)는 한 걸음씩 직접 따라간다. redirect:"follow" 로 맡기면
+  // 겉보기 멀쩡한 도메인이 안쪽 망 주소로 넘겨도 막을 수 없다.
+  for (let hop = 0; hop < 4; hop++) {
+    const bad = unsafeTarget(target);
+    if (bad) return { state: "unknown", status: 0, note: bad };
+    // HEAD 를 막는 사이트가 있어 GET 으로 보내고, 헤더가 오면 본문은 바로 끊는다
+    try {
+      const left = deadline - Date.now();
+      if (left <= 0) return { state: "unknown", status: 0, note: "응답이 없습니다" };
+      const res = await fetch(target.toString(), {
+        method: "GET", redirect: "manual", signal: AbortSignal.timeout(Math.min(LINK_TIMEOUT_MS, left)),
+        headers: { "Accept": "text/html,*/*", "User-Agent": LINK_UA },
+      });
+      try { await res.body?.cancel(); } catch { /* 본문 취소 실패는 무시 */ }
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) return { state: "ok", status: res.status, note: "" };
+        try { target = new URL(loc, target); } catch { return { state: "unknown", status: res.status, note: "옮겨 간 주소를 읽지 못했습니다" }; }
+        continue;
+      }
+      if (res.status === 404 || res.status === 410) return { state: "dead", status: res.status, note: "페이지가 없습니다" };
+      if (res.ok || res.status < 400) return { state: "ok", status: res.status, note: "" };
+      if (res.status === 403 || res.status === 429 || res.status === 405) {
+        return { state: "unknown", status: res.status, note: "자동 접속을 막는 사이트입니다" };
+      }
+      if (res.status >= 500) return { state: "unknown", status: res.status, note: "서버가 응답하지 못했습니다" };
+      return { state: "unknown", status: res.status, note: "확인하지 못했습니다" };
+    } catch (e) {
+      const m = String((e as Error)?.name || "");
+      if (m === "TimeoutError") return { state: "unknown", status: 0, note: "응답이 없습니다" };
+      // DNS 조회 실패는 주소 자체가 없을 가능성이 높지만, 인증서 오류도 여기로 온다
+      const msg = String((e as Error)?.message || "");
+      if (/dns error|failed to lookup|name not resolved/i.test(msg)) return { state: "dead", status: 0, note: "없는 주소입니다" };
+      return { state: "unknown", status: 0, note: "연결하지 못했습니다" };
+    }
+  }
+  return { state: "unknown", status: 0, note: "옮겨 가는 횟수가 너무 많습니다" };
+}
+
+// 여러 링크를 동시에 두드리되 한 번에 너무 많이 열지 않는다
+async function checkLinks(urls: string[]): Promise<LinkCheck[]> {
+  const out: LinkCheck[] = new Array(urls.length);
+  let i = 0;
+  const worker = async () => {
+    while (i < urls.length) {
+      const n = i++;
+      out[n] = await checkLink(urls[n]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LINK_CONCURRENCY, urls.length) }, worker));
+  return out;
+}
+
+// 중복 판정을 위해 주소를 같은 모양으로 맞춘다 (www, 끝 슬래시, 추적용 파라미터 제거)
+function normUrl(u: string): string {
+  try {
+    const x = new URL(String(u).trim());
+    x.hash = "";
+    x.hostname = x.hostname.replace(/^www\./i, "").toLowerCase();
+    x.protocol = x.protocol.toLowerCase();
+    [...x.searchParams.keys()].forEach((k) => { if (/^(utm_|fbclid|gclid|ref$|source$)/i.test(k)) x.searchParams.delete(k); });
+    let out = x.toString();
+    out = out.replace(/\/$/, "");
+    return out;
+  } catch { return String(u).trim().toLowerCase().replace(/\/$/, ""); }
+}
+const normTitle = (t: string) => String(t || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+// 실행하면 되돌릴 수 없는 명령. 좁게 잡는다 — sudo·--force 같은 넓은 낱말은
+// 이미 들어 있는 정상 자료(도커 정리, git 되돌리기 등)를 오탐한다.
+// 걸렸다고 무조건 막지는 않는다. 코드(snippet)는 그대로 붙여 넣어 실행하는 것이라 막고,
+// 메모·링크는 "이 명령은 쓰지 마라" 처럼 설명하는 글이 많아 표시만 하고 운영자가 고르게 둔다.
+const DANGER = [
+  // rm: 플래그가 어디에 붙든, 지우는 대상이 루트·홈·시스템 디렉터리면 잡는다
+  /\brm\s[^\n]*-[a-zA-Z]*[rf][a-zA-Z]*[^\n]*\s(\/(\*|\s|$)|\/(etc|usr|var|bin|boot|home|opt|lib)\b|~\S*|\$HOME\b)/,
+  /mkfs(\.|\s)/, /dd\s+[^\n]*of=\/dev\//,
+  // 내려받아 그대로 실행: sudo 뒤에 옵션이 끼거나 zsh 로 받는 형태까지
+  /(curl|wget)[^\n|]*\|\s*(sudo(\s+-\S+)*\s+)?(ba|z|k|fi|da)?sh\b/,
+  /drop\s+(table|database|schema)\s/i, /truncate\s+table\s/i, /delete\s+from\s+\S+\s*;/i,
+  // git push: --force, 짧은 플래그 묶음(-uf), refspec 강제(+main)
+  /git\s+push[^\n]*(\s--force(?!-with-lease)|\s-[a-zA-Z]*f[a-zA-Z]*(\s|$)|\s\+[A-Za-z0-9_.\/-]+(\s|$))/,
+  /:\(\)\s*\{\s*:\|:&\s*\}\s*;:/,
+  /chmod\s[^\n]*\b777\b[^\n]*\s\/(\s|$)/, /\b(shutdown|reboot|halt|poweroff)\s+(-f\b|-h\s+now\b|now\b)/i,
+];
+const dangerHits = (text: string) => DANGER.filter((re) => re.test(text)).map((re) => String(re));
+
 // ---------- Claude 호출 (구조화 출력: 응답이 항상 주어진 JSON 스키마를 따른다) ----------
 async function ask(
   client: Anthropic,
@@ -89,10 +235,12 @@ async function ask(
     messages: [{ role: "user", content: user }],
     output_config: { effort: opts.effort, format: { type: "json_schema", schema } },
   });
-  if (res.stop_reason === "refusal") throw new Error("AI 가 이 요청의 처리를 거절했습니다");
-  if (res.stop_reason === "max_tokens") throw new Error("AI 응답이 너무 길어 잘렸습니다. 항목 수를 줄여 다시 시도해 주세요");
+  // 아래 셋은 사용자 잘못이 아니라 우리 쪽(모델·프롬프트) 사정이므로 하루 사용량을 돌려준다
+  const ours = (m: string) => Object.assign(new Error(m), { ours: true });
+  if (res.stop_reason === "refusal") throw ours("AI 가 이 요청의 처리를 거절했습니다");
+  if (res.stop_reason === "max_tokens") throw ours("AI 응답이 너무 길어 잘렸습니다. 항목 수를 줄여 다시 시도해 주세요");
   const text = res.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("");
-  try { return JSON.parse(text); } catch { throw new Error("AI 응답을 해석하지 못했습니다"); }
+  try { return JSON.parse(text); } catch { throw ours("AI 응답을 해석하지 못했습니다"); }
 }
 
 const strArr = { type: "array", items: { type: "string" } };
@@ -119,16 +267,28 @@ Deno.serve(async (req) => {
   const { data: prof } = await sb.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
   const isAdmin = !!(prof && prof.is_admin);
 
-  let body: { action?: string; item?: Partial<Row>; ids?: string[]; tagsHint?: string[] };
+  let body: { action?: string; item?: Partial<Row>; ids?: string[]; tagsHint?: string[];
+    category?: string; topic?: string; count?: number; mix?: string; subs?: string[] };
   let rawBody: string;
   try { rawBody = await req.text(); } catch { return fail("요청을 읽지 못했습니다"); }
   if (rawBody.length > MAX_BODY_BYTES) return fail("요청이 너무 큽니다", 413);
   try { body = JSON.parse(rawBody); } catch { return fail("요청 본문이 JSON 이 아닙니다"); }
 
-  // 하루 호출 횟수 제한 (로그인만 하면 누구나 부를 수 있으므로 비용 방어선이 필요하다)
-  const { data: quotaOk, error: quotaErr } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user });
-  if (quotaErr) return fail("사용량을 확인하지 못했습니다. schema.sql 의 ai_usage 부분을 실행했는지 확인해 주세요", 500);
-  if (quotaOk === false) return fail("오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 시도해 주세요", 429);
+  // 하루 사용량 제한. 작업마다 비용이 달라 가중치를 곱해 센다.
+  // 차감은 AI 를 실제로 부르기 직전(takeQuota)에 한다. 권한·입력이 틀려 되돌아가는 요청까지
+  // 깎으면, 운영자가 아닌 사람이 expand 를 한 번 눌러 보는 것만으로 5회분이 날아간다.
+  const action = String(body.action || "");
+  const cost = ACTION_COST[action];
+  if (cost === undefined) return fail("알 수 없는 action 입니다: " + action);
+  if (action !== "suggest" && !isAdmin) return fail("운영자만 쓸 수 있습니다", 403);
+  let charged = 0;
+  const takeQuota = async (): Promise<Response | null> => {
+    const { data: ok, error } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user, cost });
+    if (error) return fail("사용량을 확인하지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
+    if (ok === false) return fail("오늘 쓸 수 있는 AI 사용량을 모두 썼습니다. 내일 다시 시도해 주세요", 429);
+    charged = cost;
+    return null;
+  };
 
   // 분야 목록 (settings.categories)
   const { data: setting } = await sb.from("settings").select("value").eq("key", "categories").maybeSingle();
@@ -141,7 +301,7 @@ Deno.serve(async (req) => {
 
   try {
     // ---------- 1) 항목 하나 분류 제안 ----------
-    if (body.action === "suggest") {
+    if (action === "suggest") {
       const src = body.item || {};
       // 프롬프트에 들어갈 값은 전부 서버에서 자른다 (길이 = 비용)
       const it: Partial<Row> = {
@@ -168,14 +328,14 @@ ${catsText(cats)}
         required: ["category", "sub", "tags", "title", "body", "reason"],
         additionalProperties: false,
       };
+      const gate = await takeQuota(); if (gate) return gate;
       const out = await ask(client, system, `다음 항목을 분류해 주세요.\n\n${itemText(it)}`, schema, { max_tokens: 4096, effort: "low" });
       const cat = cats.find((c) => c.name === out.category);
       return json({ ...out, newSub: !!(cat && out.sub && !cat.subs.includes(out.sub)) });
     }
 
     // ---------- 2) 여러 항목 다시 분류 (운영자) ----------
-    if (body.action === "organize") {
-      if (!isAdmin) return fail("운영자만 쓸 수 있습니다", 403);
+    if (action === "organize") {
       const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).filter((x) => /^[A-Za-z0-9_-]{1,64}$/.test(x)).slice(0, MAX_ORGANIZE);
       if (!ids.length) return fail("다시 분류할 항목 id 가 없습니다");
       const [{ data: rows }, { data: allRows }] = await Promise.all([
@@ -213,7 +373,17 @@ ${catsText(cats)}
       };
       const user = `다음 ${rows.length}개 항목을 검토해 주세요.\n\n` +
         rows.map((r: Row, i: number) => `[${i + 1}] id=${r.id}\n${itemText(r)}`).join("\n\n");
-      const out = await ask(client, system, user, schema, { max_tokens: 16000, effort: "low" });
+      // 분류 제안과 함께 링크가 살아 있는지도 확인한다. AI 와 무관한 일이라 나란히 돌린다.
+      // (뒤에 직렬로 붙이면 30초를 더 기다리고, 링크 점검이 터질 때 이미 값을 치른 AI 결과까지 날아간다.)
+      const linkRows = rows.filter((r: Row) => /^https?:\/\//i.test(r.url || ""));
+      const gate = await takeQuota(); if (gate) return gate;
+      const [out, checks] = await Promise.all([
+        ask(client, system, user, schema, { max_tokens: 16000, effort: "low" }),
+        checkLinks(linkRows.map((r: Row) => r.url)).catch(() => [] as LinkCheck[]),
+      ]);
+      const linkBy = new Map<string, LinkCheck>(
+        linkRows.map((r: Row, i: number) => [r.id, checks[i]] as [string, LinkCheck]).filter((e) => !!e[1]),
+      );
       const byId = new Map<string, Row>(rows.map((r: Row) => [r.id, r]));
       const proposals = (out.proposals || [])
         .filter((p: { id: string }) => byId.has(p.id))
@@ -222,14 +392,17 @@ ${catsText(cats)}
           const same = cur.category === p.category && (cur.sub || "") === (p.sub || "") &&
             JSON.stringify((cur.tags || []).slice().sort()) === JSON.stringify((p.tags || []).slice().sort());
           const cat = cats.find((c) => c.name === p.category);
-          return { ...p, changed: p.changed && !same, newSub: !!(cat && p.sub && !cat.subs.includes(p.sub)) };
+          const link = linkBy.get(p.id) || { state: "none" as LinkState, status: 0, note: "" };
+          return { ...p, changed: p.changed && !same, newSub: !!(cat && p.sub && !cat.subs.includes(p.sub)), link };
         });
-      return json({ proposals });
+      // 실제로 판단이 돌아온 항목의 id 만 돌려준다. 브라우저가 이걸로 checked_at 을 찍는다.
+      // 고칠 게 없다고 한 항목도 "봤다" 고 남기되, 모델이 응답에서 빠뜨린 항목까지 찍으면
+      // 한 번도 검토되지 않은 자료가 조용히 "확인함" 이 되어 다음 차례에서 빠진다.
+      return json({ proposals, checkedIds: proposals.map((p: { id: string }) => p.id) });
     }
 
     // ---------- 3) 분야 구조 개편안 (운영자) ----------
-    if (body.action === "taxonomy") {
-      if (!isAdmin) return fail("운영자만 쓸 수 있습니다", 403);
+    if (action === "taxonomy") {
       const { data: rows } = await sb.from("items").select("type,title,category,sub,tags").order("created_at", { ascending: false }).limit(MAX_TAXONOMY_ITEMS);
       const list = (rows || []) as Pick<Row, "type" | "title" | "category" | "sub" | "tags">[];
       const system = `${SITE_RULES}
@@ -252,16 +425,191 @@ ${catsText(cats)}
         required: ["list", "notes"],
         additionalProperties: false,
       };
+      const gate = await takeQuota(); if (gate) return gate;
       const out = await ask(client, system, user, schema, { max_tokens: 16000, effort: "medium" });
       return json({ list: out.list || [], notes: out.notes || [], itemCount: list.length });
     }
 
+    // ---------- 4) 분야에 자료 제안 (운영자) ----------
+    if (action === "expand") {
+      // 분야 이름은 화면의 "분야: 하위1, 하위2" 편집 형식으로 다시 저장되므로 쉼표·콜론을 미리 뺀다
+      const cleanCat = (v: unknown) => flat(v, CAP.category).replace(/[:：,，]/g, " ").replace(/\s{2,}/g, " ").trim();
+      const asked = cleanCat(body.category);
+      if (!asked) return fail("분야를 골라 주세요");
+      // 다듬은 이름이 기존 분야와 같아지면 그 분야의 원래 이름을 쓴다. 안 그러면 같은 분야가 둘로 갈라진다.
+      const match = cats.find((c) => c.name === asked) || cats.find((c) => cleanCat(c.name) === asked);
+      const catName = match ? match.name : asked;
+      const isNew = !match;
+      const topic = flat(body.topic, CAP.topic);
+      const want = Math.min(Math.max(Math.floor(Number(body.count)) || MAX_EXPAND, 3), MAX_EXPAND);
+      const mix = ["link", "even", "text"].includes(String(body.mix)) ? String(body.mix) : "even";
+      const subs = (match ? match.subs : cutArr(body.subs, 12, CAP.sub)).map((x) => flat(x, CAP.sub)).filter(Boolean);
+
+      // 이미 있는 자료를 알려 줘야 같은 것을 또 제안하지 않는다.
+      // 자료가 늘어도 프롬프트가 커지지 않도록 세 가지만 넣는다: 그 분야 전체, 자주 쓰는 태그, 전체 호스트 목록.
+      const [{ data: sameCat }, { data: allRows }] = await Promise.all([
+        sb.from("items").select("type,title,url").eq("category", catName).limit(400),
+        sb.from("items").select("url,tags").limit(2000),
+      ]);
+      const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+      // 아래 목록은 전부 남이 써 넣은 글이다. 시스템 프롬프트에 들어가므로 한 줄로 눕혀서 넣는다.
+      const hosts = [...new Set((allRows || []).map((r: { url?: string }) => host(r.url || "")).filter(Boolean))];
+      const existing = (sameCat || []) as { type: string; title: string; url: string }[];
+
+      // 종류 배합. 기존 자료가 링크 위주라 그 결을 따르되, 운영자가 고를 수 있게 한다.
+      // 반올림하면 합이 want 와 어긋나(예: 10분의 7·2·1 을 3개로 줄이면 2+1+1=4) 프롬프트가 스스로 모순된다.
+      // 내림한 뒤 남는 자리를 소수부가 큰 종류에 하나씩 준다.
+      const MIX: Record<string, { link: number; note: number; snippet: number }> =
+        { link: { link: 7, note: 2, snippet: 1 }, even: { link: 6, note: 2, snippet: 2 }, text: { link: 4, note: 3, snippet: 3 } };
+      const base = MIX[mix];
+      const kinds = ["link", "note", "snippet"] as const;
+      const exact = kinds.map((k) => (base[k] * want) / 10);
+      const plan = { link: 0, note: 0, snippet: 0 } as Record<string, number>;
+      kinds.forEach((k, i) => (plan[k] = Math.floor(exact[i])));
+      let left = want - kinds.reduce((a, k) => a + plan[k], 0);
+      kinds.map((k, i) => ({ k, frac: exact[i] - Math.floor(exact[i]) }))
+        .sort((a, b) => b.frac - a.frac)
+        .forEach((x) => { if (left > 0) { plan[x.k]++; left--; } });
+
+      const system = `${SITE_RULES}
+
+분야 목록:
+${catsText(cats)}${isNew ? `\n- ${catName} (이번에 새로 만드는 분야)` : ""}
+
+당신의 일: "${catName}" 분야에 넣을 자료 ${want}개를 제안한다.${topic ? `\n운영자가 준 주제 힌트: ${topic}` : ""}
+${subs.length ? `이 분야의 하위분야: ${subs.join(", ")}` : "이 분야에는 아직 하위분야가 없다. 필요하면 짧게 제안한다."}
+
+## 종류와 개수
+- link ${plan.link}개, note ${plan.note}개, snippet ${plan.snippet}개. 합계 ${want}개를 정확히 지킨다.
+- link: 외부 사이트. url 필수, body 는 왜 쓸모 있는지 한 줄(40~90자).
+- note: 정리 메모. url 없음. body 는 번호 붙인 항목 5~8개, 200~300자.
+- snippet: 코드. url 없음. lang 에 언어(bash, python, sql 등). body 는 8줄 이내, 각 줄에 한국어 주석.
+
+## link 규칙 — 지어낸 주소는 절대 안 된다
+- **확실히 아는 사이트의 도메인 최상단 주소만 쓴다.** 예: https://excalidraw.com
+- 하위 경로(/docs/guide/intro 같은 깊은 주소)는 **확신이 없으면 쓰지 마라.** 경로가 바뀌어 사라지는 일이 흔하다.
+- 주소가 확실하지 않으면 그 항목을 link 대신 **note 로 바꿔서** 낸다.
+- 접속을 확인할 수 없는 사이트, 로그인이 필요한 곳, 광고성 사이트는 넣지 않는다.
+
+## note·snippet 규칙 — 확인할 방법이 없으므로 더 조심한다
+- snippet 은 널리 쓰이는 표준 명령만. 버전이나 배포판에 따라 달라지는 것은 쓰지 않는다.
+- 되돌릴 수 없는 명령(파일 삭제, 디스크 포맷, 원격 강제 덮어쓰기)은 절대 넣지 않는다.
+- note 에 연도·수치·고유명사는 확실할 때만 쓴다. 애매하면 그 문장을 빼라.
+- 코드가 정확한지 확신이 없으면 snippet 대신 note 로 낸다.
+
+## 게시 기준
+정치·종교 풍자, 특정 인물이나 회사 조롱, 성적·폭력적 표현은 넣지 않는다. 애매하면 넣지 않는다.
+
+## 이미 있는 자료 (같은 것을 또 내지 마라)
+${existing.length ? existing.map((r) => `- [${flat(r.type, 12)}] ${flat(r.title, 60)}${r.url ? " (" + host(r.url) + ")" : ""}`).join("\n") : "(이 분야에는 아직 자료가 없다)"}
+
+## 자료함 전체에 이미 있는 사이트 (이 호스트는 피한다)
+${hosts.slice(0, 120).join(", ") || "(없음)"}
+
+## 자주 쓰는 태그 (맞으면 재사용한다)
+${topTags(allRows || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(", ") || "(아직 없음)"}
+
+각 항목의 reason 에는 왜 이 분야에 필요한지 30자 이내로 쓴다.`;
+
+      const schema = {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["link", "note", "snippet"] },
+                title: { type: "string" },
+                url: { type: "string" },
+                lang: { type: "string" },
+                body: { type: "string" },
+                sub: { type: "string" },
+                tags: strArr,
+                reason: { type: "string" },
+              },
+              required: ["type", "title", "url", "lang", "body", "sub", "tags", "reason"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["items"],
+        additionalProperties: false,
+      };
+
+      const gate = await takeQuota(); if (gate) return gate;
+      const out = await ask(client, system, `"${catName}" 분야에 넣을 자료 ${want}개를 제안해 주세요.`, schema,
+        { max_tokens: 24000, effort: "medium" });
+
+      // ----- 서버 검증. 모델 말을 그대로 믿지 않는다 -----
+      const raw = (out.items || []).slice(0, want);
+      let items = raw.map((r: Record<string, unknown>) => ({
+        type: ["link", "note", "snippet"].includes(String(r.type)) ? String(r.type) : "note",
+        title: cut(r.title, CAP.title).trim(),
+        url: cut(r.url, CAP.url).trim(),
+        lang: cut(r.lang, CAP.lang).trim(),
+        body: cut(r.body, 4000).trim(),
+        sub: cut(r.sub, CAP.sub).replace(/[:：,，\n]/g, " ").trim(),   // 분야 편집 형식을 깨뜨리지 않게
+        tags: normTags(r.tags),
+        reason: cut(r.reason, 120).trim(),
+      })).filter((r: { title: string }) => r.title);
+
+      // 종류별로 있어야 할 것과 없어야 할 것을 정리한다.
+      // 주소 없는 link, 내용 없는 메모·코드는 화면에서 고를 수 없는 항목이 되므로 여기서 뺀다.
+      items = items.filter((r: { type: string; url: string; body: string }) =>
+        !(r.type === "link" && !/^https?:\/\//i.test(r.url)) && !(r.type !== "link" && !r.body));
+      items.forEach((r: { type: string; url: string; lang: string }) => {
+        if (r.type !== "link") r.url = "";          // 메모·코드는 주소가 없다
+        if (r.type !== "snippet") r.lang = "";
+      });
+      const dropped = raw.length - items.length;    // 버린 개수를 화면이 설명할 수 있게 알려 준다
+
+      // 링크가 실제로 열리는지 확인한다
+      const linkIdx = items.map((r: { type: string }, i: number) => (r.type === "link" ? i : -1)).filter((i: number) => i >= 0);
+      const results = await checkLinks(linkIdx.map((i: number) => items[i].url)).catch(() => [] as LinkCheck[]);
+      const checkOf = new Map<number, LinkCheck>(
+        linkIdx.map((i: number, n: number) => [i, results[n]] as [number, LinkCheck]).filter((e) => !!e[1]),
+      );
+
+      // 이미 있는 자료와 겹치는지 본다
+      const seenUrl = new Map<string, string>();
+      const seenTitle = new Map<string, string>();
+      (allRows || []).forEach((r: { url?: string }) => { if (r.url) seenUrl.set(normUrl(r.url), "1"); });
+      existing.forEach((r) => { seenTitle.set(normTitle(r.title), r.title); if (r.url) seenUrl.set(normUrl(r.url), r.title); });
+
+      // 위 표본(limit)은 자료가 늘면 잘린다. 제안된 주소만 따로 한 번 더 조회해 확실히 본다.
+      const askUrls = items.map((r: { url: string }) => r.url).filter(Boolean).slice(0, 50);
+      if (askUrls.length) {
+        const { data: hitRows } = await sb.from("items").select("url").in("url", askUrls);
+        (hitRows || []).forEach((r: { url?: string }) => { if (r.url) seenUrl.set(normUrl(r.url), "1"); });
+      }
+
+      const withinBatch = new Set<string>();
+      const finalItems = items.map((r: Record<string, string> & { tags: string[] }, i: number) => {
+        const link = checkOf.get(i) || { state: "none" as LinkState, status: 0, note: "" };
+        const key = r.url ? normUrl(r.url) : "t:" + normTitle(r.title);
+        let dup = "none";
+        if (withinBatch.has(key) || withinBatch.has("t:" + normTitle(r.title))) dup = "batch";
+        else if (r.url && seenUrl.has(normUrl(r.url))) dup = "url";
+        else if (seenTitle.has(normTitle(r.title))) dup = "title";
+        withinBatch.add(key);
+        withinBatch.add("t:" + normTitle(r.title));   // 주소가 달라도 제목이 같으면 같은 것으로 본다
+        const hits = dangerHits(r.body + "\n" + r.title);
+        const risk = hits.length ? (r.type === "snippet" ? "block" : "warn") : "none";
+        return { ...r, link, dup, risk };
+      });
+
+      const got = { link: 0, note: 0, snippet: 0 } as Record<string, number>;
+      finalItems.forEach((r: { type: string }) => { got[r.type] = (got[r.type] || 0) + 1; });
+      return json({ category: catName, isNew, items: finalItems, mixWanted: plan, mixGot: got, count: finalItems.length, want, dropped });
+    }
+
     return fail("알 수 없는 action 입니다: " + String(body.action || ""));
   } catch (e) {
-    // 우리 쪽 문제로 실패했으면 차감한 하루 한도를 돌려준다 (사용자 잘못이 아니다)
-    const ours = e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.APIConnectionError ||
-      e instanceof Anthropic.RateLimitError || (e instanceof Anthropic.APIError && (!e.status || e.status >= 500));
-    if (ours) { try { await sb.rpc("ai_refund_quota"); } catch { /* 환불 실패는 무시 */ } }
+    // AI 를 부르다 실패했으면 차감한 하루 사용량을 돌려준다 (키·연결·서버·거절·응답 잘림).
+    // 부르고 난 뒤 우리 코드가 터진 경우는 돌려주지 않는다 — 요금은 이미 나갔고, 그건 고쳐야 할 버그다.
+    const callFailed = e instanceof Anthropic.APIError || !!(e as { ours?: boolean })?.ours;
+    if (charged && callFailed) { try { await sb.rpc("ai_refund_quota", { cost: charged }); } catch { /* 환불 실패는 무시 */ } }
 
     if (e instanceof Anthropic.AuthenticationError) {
       return fail("AI 키가 만료되었거나 올바르지 않습니다. 운영자에게 알려 주세요 (README 7단계)", 500);
