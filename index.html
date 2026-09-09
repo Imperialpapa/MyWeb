@@ -784,11 +784,11 @@ const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'�
 const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',cat:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCats:[]};
 const ME={id:null,name:'',email:''};
 let store=null;
-/* AI 가 제안한 자료를 잠시 들고 있는다. 한 번 받는 데 하루 사용량 5회분이 드는데
+/* AI 가 제안한 자료를 잠시 들고 있는다. 한 번 받는 데 하루 사용량 15회분이 드는데
    창을 잘못 닫으면 그대로 날아가기 때문이다. 30분이 지나면 링크 점검 결과가 낡아 버린다. */
 let expCache=null;
 /* 아직 돌고 있는 자료 채우기 요청. 응답을 기다리는 동안 창을 닫았다 다시 열면 이걸 보고 이어 붙인다.
-   이게 없으면 30~60초짜리 요청이 허공으로 사라지고, 운영자는 5회분을 또 쓰게 된다. */
+   이게 없으면 30~60초짜리 요청이 허공으로 사라지고, 운영자는 15회분을 또 쓰게 된다. */
 let expPending=null;
 /* 몇 번째 요청·저장인지. 늦게 끝난 옛 작업이 새 결과를 덮어쓰지 못하게 막는 번호다.
    요청을 새로 걸 때, 저장을 시작할 때, 계정이 바뀔 때 하나씩 올라간다. */
@@ -1434,7 +1434,7 @@ function openAiOrganize(){
     </div>
     <div class="ai-sec">
       <h3>3. 분야에 자료 채우기</h3>
-      <p class="hint">고른 분야에 넣을 자료를 AI 가 제안합니다. 링크는 서버가 실제로 열어 보고, 이미 있는 자료와 겹치는지, 위험한 명령이 섞였는지도 확인합니다. <b>체크한 것만 추가됩니다.</b> 30초에서 1분쯤 걸리고 하루 AI 사용량 5회분을 씁니다(개수를 줄여도 같습니다). 창을 닫아도 요청은 그대로 진행되고, 받은 제안은 잠시 남아 있어 다시 열면 이어서 볼 수 있습니다.</p>
+      <p class="hint">고른 분야에 넣을 자료를 AI 가 제안합니다. 링크는 서버가 실제로 열어 보고, 이미 있는 자료와 겹치는지, 위험한 명령이 섞였는지도 확인합니다. <b>체크한 것만 추가됩니다.</b> 30초에서 1분쯤 걸리고 하루 AI 사용량 15회분을 씁니다(개수를 줄여도 같습니다). 창을 닫아도 요청은 그대로 진행되고, 받은 제안은 잠시 남아 있어 다시 열면 이어서 볼 수 있습니다.</p>
       <div class="ai-fields">
         <label class="fld">분야<select id="expCat">
           ${expCats.map(n=>`<option value="${esc(n)}" ${n===expPre?'selected':''}>${esc(n)} (${catCnt[n]||0}개)</option>`).join('')}
@@ -1583,7 +1583,7 @@ function openAiOrganize(){
 
   // 아직 돌고 있는 요청이 있으면 그 결과를 이 창에 이어 붙인다
   if(expPending) expAttach(expPending);
-  // 지난번에 받아 둔 제안이 남아 있으면 이어서 볼 수 있게 한다 (한 번 받는 데 5회분이 든다)
+  // 지난번에 받아 둔 제안이 남아 있으면 이어서 볼 수 있게 한다 (한 번 받는 데 15회분이 든다)
   else if(expCache&&expCache.items.length&&Date.now()-expCache.at<1800000){
     $('#expMsg').innerHTML=`조금 전 받은 제안 ${expCache.items.length}개가 남아 있습니다. `
       +`<button type="button" class="btn small" id="expResume">이어서 보기</button> `
@@ -1610,7 +1610,7 @@ function openAiOrganize(){
       // 그 사이 계정이 바뀌었거나 다른 요청이 시작됐으면 이 결과는 버린다
       if(res.gen!==expGen){ msg.textContent='그 사이 다른 일이 있어 이 결과는 쓰지 않았습니다.'; return; }
       if(res.err){ msg.textContent='실패: '+(res.err.message||res.err.code||'오류'); return; }
-      if(!res.items.length){ msg.textContent='제안을 받지 못했습니다. 주제 힌트를 조금 더 구체적으로 적고 다시 시도해 주세요. (이번 시도에도 사용량 5회분은 차감됩니다)'; return; }
+      if(!res.items.length){ msg.textContent='제안을 받지 못했습니다. 주제 힌트를 조금 더 구체적으로 적고 다시 시도해 주세요. (이번 시도에도 사용량 15회분은 차감됩니다)'; return; }
       exp={cat:res.cat,isNew:res.isNew,items:res.items};
       msg.textContent=expSummary(res.r);
       renderExp();
@@ -1756,6 +1756,18 @@ function openAiOrganize(){
   }
 }
 
+/* 지금 서버가 내려 주는 index.html 의 내용 지문. Vercel 의 ETag 가 파일 MD5 라 그대로 쓴다.
+   손으로 올리는 버전 번호는 올리는 것을 잊거나 푸시를 빠뜨리면 거짓말을 하는데, 이 값은 그럴 수가 없다.
+   로컬에서 `md5sum index.html` 한 앞 7자리와 견주면 배포가 되었는지 바로 안다. */
+async function showVersion(){
+  const el=$('#verLine'); if(!el) return;
+  try{
+    const r=await fetch(location.pathname,{method:'HEAD',cache:'no-store'});
+    const tag=(r.headers.get('etag')||'').replace(/^W\//,'').replace(/"/g,'').slice(0,7);
+    if(tag&&document.body.contains(el)) el.textContent=' · 배포본 '+tag;
+  }catch(e){ /* 파일로 직접 열었거나 헤더가 없으면 표시하지 않는다 */ }
+}
+
 function openMore(){
   modal(`${mh('더 보기')}<div class="modal-b"><div class="menu">
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
@@ -1763,10 +1775,11 @@ function openMore(){
     ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 · 자료 채우기</small></button>`:''}
     ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
-    <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개</div>
+    <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개<span id="verLine"></span></div>
   </div>`,'narrow');
   $('#veil').addEventListener('click',async e=>{ const b=e.target.closest('[data-m]'); if(!b) return; const m=b.dataset.m;
     if(m==='io') openIO(); else if(m==='owners') openCatOwners(); else if(m==='ai') openAiOrganize(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
+  showVersion();
 }
 
 function openIO(){

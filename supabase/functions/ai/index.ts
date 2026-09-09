@@ -18,9 +18,12 @@ const MODEL = "claude-opus-5";
 const MAX_ORGANIZE = 30;      // 한 번에 다시 분류할 항목 수 (브라우저가 이 크기로 나눠 부른다)
 const MAX_TAXONOMY_ITEMS = 1500;
 const MAX_BODY_BYTES = 32_000;   // 요청 본문 상한
-const DAILY_LIMIT = { user: 40, admin: 600 };   // 하루 AI 사용량 (아래 ACTION_COST 로 가중)
-// 작업마다 비용이 다르다. 자료 10개를 만들어 내는 expand 는 분류 제안보다 훨씬 비싸다.
-const ACTION_COST: Record<string, number> = { suggest: 1, organize: 1, taxonomy: 2, expand: 5 };
+const DAILY_LIMIT = { user: 20, admin: 300 };   // 하루 AI 사용량 (아래 ACTION_COST 로 가중)
+// 작업마다 비용이 다르다. 가중치는 실제 토큰 비용을 분류 제안 1회 기준으로 나눈 값이다
+// (분류 제안 약 25원, 재분류 30개 묶음 약 219원, 분야 구조 약 169원, 자료 채우기 약 371원 — 2026-09-09 추정).
+// 이 값이 틀리면 비싼 작업이 싼 작업인 척하며 한도를 빠져나간다. 실제 사용량은 ask() 가 로그로 남기니
+// 한 달쯤 쌓인 뒤 대시보드 로그를 보고 다시 맞추는 것이 좋다.
+const ACTION_COST: Record<string, number> = { suggest: 1, organize: 9, taxonomy: 7, expand: 15 };
 const MAX_EXPAND = 10;           // 한 번에 제안할 자료 수 상한
 const LINK_TIMEOUT_MS = 6000;    // 링크 하나를 기다리는 시간
 const LINK_CONCURRENCY = 6;      // 동시에 두드릴 링크 수
@@ -216,16 +219,24 @@ const DANGER = [
 const dangerHits = (text: string) => DANGER.filter((re) => re.test(text)).map((re) => String(re));
 
 // ---------- Claude 호출 (구조화 출력: 응답이 항상 주어진 JSON 스키마를 따른다) ----------
+// call.ok 는 "AI 응답을 끝까지 받았다" 는 표시다. 부르는 쪽이 이걸 보고 하루 사용량을 돌려줄지 정한다.
 async function ask(
   client: Anthropic,
   system: string,
   user: string,
   schema: Record<string, unknown>,
-  opts: { max_tokens: number; effort: "low" | "medium" | "high" },
+  opts: { max_tokens: number; effort: "low" | "medium" | "high"; label: string; timeout_ms: number },
+  call: { ok: boolean },
 ) {
+  // 사용자 잘못이 아닌 실패. 던지면 부르는 쪽이 하루 사용량을 돌려준다.
+  const ours = (m: string) => Object.assign(new Error(m), { ours: true });
+  const t0 = Date.now();
   // claude-opus-5 는 thinking 이 기본으로 켜져 있고 max_tokens 는 (thinking + 응답) 합계 상한이다.
   // 값이 작으면 생각하다가 잘려 stop_reason=max_tokens 로 실패하므로 넉넉히 잡는다.
-  const res = await client.beta.messages.create({
+  //
+  // 반드시 스트리밍으로 받는다. max_tokens 가 크면 SDK 가 "10분을 넘길 수 있다" 며
+  // 한 번에 받는 요청을 보내기도 전에 거부한다 (자료 채우기의 24000 이 여기에 걸렸다).
+  const stream = await client.beta.messages.create({
     model: MODEL,
     max_tokens: opts.max_tokens,
     // 안전 분류기가 요청을 거절하면 서버가 다른 모델로 같은 요청을 다시 시도한다
@@ -234,12 +245,50 @@ async function ask(
     system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: user }],
     output_config: { effort: opts.effort, format: { type: "json_schema", schema } },
-  });
-  // 아래 셋은 사용자 잘못이 아니라 우리 쪽(모델·프롬프트) 사정이므로 하루 사용량을 돌려준다
-  const ours = (m: string) => Object.assign(new Error(m), { ours: true });
-  if (res.stop_reason === "refusal") throw ours("AI 가 이 요청의 처리를 거절했습니다");
-  if (res.stop_reason === "max_tokens") throw ours("AI 응답이 너무 길어 잘렸습니다. 항목 수를 줄여 다시 시도해 주세요");
-  const text = res.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("");
+    stream: true,
+    // Supabase 는 응답이 없는 요청을 150초에서 끊는다. 그보다 먼저 우리가 끊어야
+    // 아래 catch 가 돌아 하루 사용량이 환불되고, 운영자도 침묵 대신 오류 문구를 받는다.
+  }, { timeout: opts.timeout_ms });
+
+  let text = "";
+  let stop: string | null = null;
+  let done = false;                     // message_stop 을 봤는가
+  let tokIn = 0, tokCache = 0, tokOut = 0;
+  for await (const ev of stream) {
+    const e = ev as {
+      type: string;
+      delta?: { type?: string; text?: string; stop_reason?: string | null };
+      message?: { usage?: { input_tokens?: number; cache_read_input_tokens?: number } };
+      usage?: { output_tokens?: number };
+    };
+    // 생각(thinking_delta)은 버리고 답(text_delta)만 모은다
+    if (e.type === "content_block_delta" && e.delta?.type === "text_delta") text += e.delta.text || "";
+    else if (e.type === "message_delta") {
+      if (e.delta?.stop_reason) stop = e.delta.stop_reason;
+      if (e.usage?.output_tokens) tokOut = e.usage.output_tokens;   // 누적값이라 덮어쓴다
+    } else if (e.type === "message_start") {
+      tokIn = e.message?.usage?.input_tokens || 0;
+      tokCache = e.message?.usage?.cache_read_input_tokens || 0;
+    } else if (e.type === "message_stop") done = true;
+  }
+
+  // 얼마를 썼는지 남긴다. 대시보드 Edge Functions → ai → Logs 에서 볼 수 있다.
+  // 이게 없으면 어느 작업이 비싼지 청구서 총액 말고는 알 방법이 없다.
+  console.log(JSON.stringify({
+    ai: opts.label, model: MODEL, effort: opts.effort,
+    in: tokIn, cached: tokCache, out: tokOut, ms: Date.now() - t0, stop: stop || "none",
+  }));
+
+  // 끊긴 스트림을 성공으로 오해하면, 반쪽짜리 JSON 을 두고 엉뚱한 오류를 낸다
+  if (!done) throw ours("AI 응답이 도중에 끊겼습니다. 잠시 후 다시 시도해 주세요");
+  call.ok = true;   // 여기까지 왔으면 응답을 끝까지 받았다
+
+  if (stop === "refusal") throw ours("AI 가 이 요청의 처리를 거절했습니다");
+  if (stop === "max_tokens") {
+    throw ours(opts.label === "suggest"
+      ? "AI 응답이 너무 길어 잘렸습니다. 내용을 조금 줄여 다시 시도해 주세요"
+      : "AI 응답이 너무 길어 잘렸습니다. 항목 수를 줄여 다시 시도해 주세요");
+  }
   try { return JSON.parse(text); } catch { throw ours("AI 응답을 해석하지 못했습니다"); }
 }
 
@@ -276,12 +325,13 @@ Deno.serve(async (req) => {
 
   // 하루 사용량 제한. 작업마다 비용이 달라 가중치를 곱해 센다.
   // 차감은 AI 를 실제로 부르기 직전(takeQuota)에 한다. 권한·입력이 틀려 되돌아가는 요청까지
-  // 깎으면, 운영자가 아닌 사람이 expand 를 한 번 눌러 보는 것만으로 5회분이 날아간다.
+  // 깎으면, 운영자가 아닌 사람이 expand 를 한 번 눌러 보는 것만으로 15회분이 날아간다.
   const action = String(body.action || "");
   const cost = ACTION_COST[action];
   if (cost === undefined) return fail("알 수 없는 action 입니다: " + action);
   if (action !== "suggest" && !isAdmin) return fail("운영자만 쓸 수 있습니다", 403);
   let charged = 0;
+  const call = { ok: false };   // ask() 가 응답을 끝까지 받으면 true
   const takeQuota = async (): Promise<Response | null> => {
     const { data: ok, error } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user, cost });
     if (error) return fail("사용량을 확인하지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
@@ -329,7 +379,7 @@ ${catsText(cats)}
         additionalProperties: false,
       };
       const gate = await takeQuota(); if (gate) return gate;
-      const out = await ask(client, system, `다음 항목을 분류해 주세요.\n\n${itemText(it)}`, schema, { max_tokens: 4096, effort: "low" });
+      const out = await ask(client, system, `다음 항목을 분류해 주세요.\n\n${itemText(it)}`, schema, { max_tokens: 8000, effort: "low", label: "suggest", timeout_ms: 60_000 }, call);
       const cat = cats.find((c) => c.name === out.category);
       return json({ ...out, newSub: !!(cat && out.sub && !cat.subs.includes(out.sub)) });
     }
@@ -378,7 +428,7 @@ ${catsText(cats)}
       const linkRows = rows.filter((r: Row) => /^https?:\/\//i.test(r.url || ""));
       const gate = await takeQuota(); if (gate) return gate;
       const [out, checks] = await Promise.all([
-        ask(client, system, user, schema, { max_tokens: 16000, effort: "low" }),
+        ask(client, system, user, schema, { max_tokens: 16000, effort: "low", label: "organize", timeout_ms: 110_000 }, call),
         checkLinks(linkRows.map((r: Row) => r.url)).catch(() => [] as LinkCheck[]),
       ]);
       const linkBy = new Map<string, LinkCheck>(
@@ -426,7 +476,7 @@ ${catsText(cats)}
         additionalProperties: false,
       };
       const gate = await takeQuota(); if (gate) return gate;
-      const out = await ask(client, system, user, schema, { max_tokens: 16000, effort: "medium" });
+      const out = await ask(client, system, user, schema, { max_tokens: 16000, effort: "medium", label: "taxonomy", timeout_ms: 100_000 }, call);
       return json({ list: out.list || [], notes: out.notes || [], itemCount: list.length });
     }
 
@@ -539,7 +589,7 @@ ${topTags(allRows || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(", ")
 
       const gate = await takeQuota(); if (gate) return gate;
       const out = await ask(client, system, `"${catName}" 분야에 넣을 자료 ${want}개를 제안해 주세요.`, schema,
-        { max_tokens: 24000, effort: "medium" });
+        { max_tokens: 24000, effort: "medium", label: "expand", timeout_ms: 100_000 }, call);
 
       // ----- 서버 검증. 모델 말을 그대로 믿지 않는다 -----
       const raw = (out.items || []).slice(0, want);
@@ -606,10 +656,12 @@ ${topTags(allRows || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(", ")
 
     return fail("알 수 없는 action 입니다: " + String(body.action || ""));
   } catch (e) {
-    // AI 를 부르다 실패했으면 차감한 하루 사용량을 돌려준다 (키·연결·서버·거절·응답 잘림).
-    // 부르고 난 뒤 우리 코드가 터진 경우는 돌려주지 않는다 — 요금은 이미 나갔고, 그건 고쳐야 할 버그다.
-    const callFailed = e instanceof Anthropic.APIError || !!(e as { ours?: boolean })?.ours;
-    if (charged && callFailed) { try { await sb.rpc("ai_refund_quota", { cost: charged }); } catch { /* 환불 실패는 무시 */ } }
+    // 하루 사용량을 돌려주는 경우는 둘이다.
+    //   ① AI 응답을 끝까지 받지 못했다 (키·연결·서버, SDK 가 아예 안 보낸 경우 포함) → 값을 치르지 않았다
+    //   ② 받긴 했는데 쓸 수 없었다 (거절·응답 잘림·해석 실패) → 사용자 잘못이 아니다
+    // 받고 난 뒤 우리 코드가 터진 경우만 돌려주지 않는다. 요금은 이미 나갔고, 그건 고쳐야 할 버그다.
+    const refundable = !call.ok || !!(e as { ours?: boolean })?.ours;
+    if (charged && refundable) { try { await sb.rpc("ai_refund_quota", { cost: charged }); } catch { /* 환불 실패는 무시 */ } }
 
     if (e instanceof Anthropic.AuthenticationError) {
       return fail("AI 키가 만료되었거나 올바르지 않습니다. 운영자에게 알려 주세요 (README 7단계)", 500);

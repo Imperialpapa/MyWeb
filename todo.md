@@ -23,6 +23,19 @@
   npx supabase functions deploy ai
   ```
   실행 뒤 확인: `select proname, pronargs from pg_proc where proname in ('ai_take_quota','ai_refund_quota','mark_checked');` 이 3줄이면 정상.
+- [ ] **Anthropic 콘솔에서 월 지출 한도 걸기** (console.anthropic.com → Settings → Limits).
+  사이트 안의 하루 한도는 우리 쪽 방어선이고 계정 차원의 상한은 별개다. 월 30달러쯤으로 걸어 두면
+  코드에 구멍이 있어도 청구서가 그 위로 올라가지 않는다. 5분이면 된다
+- [ ] **한 달 뒤 토큰 로그로 가중치 다시 맞추기**. 대시보드 Edge Functions → ai → Logs 에 호출마다
+  `{"ai":"expand","in":...,"out":...,"ms":...}` 가 남는다. 지금 `ACTION_COST` 는 추정치 기반이라
+  실측이 두 배까지 다를 수 있다. 한 달치가 쌓이면 다시 계산할 것
+- [ ] **Supabase 자체 백업**. 무료 요금제는 백업이 없다. GitHub Actions 로 주 1회 `pg_dump` 를 떠 두면 0원이다.
+  남이 올린 자료를 잃으면 복구 수단이 전혀 없다. 지금 규모에서 가장 값싼 보험이다
+- [ ] **일시정지 방지**. Supabase 무료 프로젝트는 일주일 쉬면 멈춘다. 하루 1회 가벼운 질의를 거는 cron 을 걸 것
+- [ ] **도메인 확보 검토** (연 15,000원 안팎). 지금 `*.vercel.app` 에 묶여 있으면 호스팅을 옮길 때마다
+  Supabase Redirect URLs 와 카카오 콘솔 도메인을 다시 설정해야 한다. 도메인을 먼저 붙이면 그 작업이 한 번으로 끝난다
+- [ ] **Vercel 무료는 비상업 전용이다.** 결제·광고·유료 플랜을 붙이는 날 Pro(월 3만원대)로 올리거나
+  Cloudflare Pages 로 옮겨야 한다. 후원(Donation)은 명시적으로 허용된다. 옮긴다면 도메인을 먼저 붙여 둘 것
 - [ ] `supabase/seed-4.sql` 실행 (유머 분야 + 자료 12개)
 - [ ] 운영자로 **✦ AI 정리** 세 섹션을 한 번씩 눌러 보기 (재분류 표, 분야 구조 개편안, **분야에 자료 채우기**)
   (함수 코드를 고치면 `npx supabase functions deploy ai` 만 다시 실행. 로그는 대시보드 Edge Functions → ai → Logs)
