@@ -550,6 +550,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
 <footer class="foot">
   <span>단축키: <span class="mono">/</span> 검색 · <span class="mono">↑↓</span> 이동 · <span class="mono">Enter</span> 열기 · <span class="mono">n</span> 새 항목 · <span class="mono">Esc</span> 닫기</span>
   <span>검색어 예: <span class="mono">type:snippet #docker</span>, <span class="mono">cat:운동</span></span>
+  <span id="partners" hidden></span>
 </footer>
 
 <div id="modalRoot"></div>
@@ -989,8 +990,39 @@ const colsOf=id=>S.cols.filter(c=>(c.itemIds||[]).includes(id));
 /* ================================================================
    렌더
    ================================================================ */
+/* 제휴 사이트. 새 표를 만들지 않고 모음(collections) 하나를 그대로 쓴다.
+   제휴 사이트도 결국 자료 하나이고, 모음이 이미 "주제별로 항목을 묶는" 그릇이라
+   검색·권한·신고·수정이 전부 그대로 딸려 온다. 제휴가 늘어도 모음에 담기만 하면 되고 코드는 안 고친다.
+   모음을 **id** 로 가리키는 것이 핵심이다 (config.js 의 PARTNER_COL).
+   이름으로 가리키면 모음 이름을 바꾸는 순간 바닥글이 오류 없이 조용히 빈다. 오늘 분야에서 겪은 그대로다. */
+const PARTNER_MAX=6;   // 바닥글이 길어지지 않게. 넘치는 만큼은 "외 N곳" 으로 알린다 (조용히 자르지 않는다)
+function renderPartners(){
+  const el=$('#partners'); if(!el) return;
+  const col=CFG.PARTNER_COL?S.cols.find(c=>c.id===CFG.PARTNER_COL):null;
+  // **주인이 없는 모음만 그린다.** 모음 id 는 선착순이라, 그 자리가 비어 있을 때
+  // 아무 로그인 사용자나 같은 id 로 모음을 만들어 바닥글을 통째로 가져갈 수 있다.
+  // partners.sql 이 SQL Editor 에서 만든 모음은 주인이 없고(owner_id null), 남이 만든 것은 반드시 주인이 있다.
+  // 그래서 이 한 줄이 선점을 무력화한다. 화면에서 만든 모음은 여기에 못 쓴다 — partners.sql 로 만들어야 한다.
+  const mine=col&&!col.ownerId;
+  // 주소가 열 수 없는 것(javascript: 등)은 빼고, 지워진 자료 id 가 모음에 남아 있어도 건너뛴다
+  const links=mine?(col.itemIds||[]).map(id=>byId(id)).filter(it=>it.id&&safeUrl(it.url)):[];
+  el.hidden=!links.length;
+  if(!links.length) return;
+  const shown=links.slice(0,PARTNER_MAX), rest=links.length-shown.length;
+  el.innerHTML=`${esc(col.title||'제휴')}: `
+    +shown.map(it=>`<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)} ↗</a>`).join(' · ')
+    +(rest?` · <a href="#" data-col="${esc(col.id)}">외 ${rest}곳</a>`:'');
+}
+// 바닥글은 사이드바(.rail) 바깥이라 그쪽 클릭 처리가 닿지 않는다. 여기만 따로 받는다.
+$('#partners').addEventListener('click',e=>{
+  const k=e.target.closest('[data-col]'); if(!k) return;
+  e.preventDefault();
+  Object.assign(S,{col:k.dataset.col,q:'',type:'all',catId:'all',sub:null,tag:null,mine:false,sel:null,cursor:-1,view:'list'});
+  $('#q').value=''; render();
+});
+
 function render(){
-  renderMe(); renderRail(); renderReviewBtn();
+  renderMe(); renderRail(); renderPartners(); renderReviewBtn();
   const inReview=S.view==='review';
   $('#list').hidden=inReview; $('#review').hidden=!inReview; $('#colHead').hidden=inReview; document.querySelector('.bar').hidden=inReview;
   if(inReview){ renderReview(); return; }

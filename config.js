@@ -11,4 +11,8 @@ window.TOOLBOX_CONFIG = {
   AI: true,
   SITE_NAME: "빠른 연결",
   SITE_TAGLINE: "누구나 올리고, 누구나 찾는 자료함",
+  // 제휴 사이트를 담아 둔 **모음의 id**. 그 모음에 든 자료가 바닥글에 링크로 나옵니다.
+  // 이름이 아니라 id 로 가리킵니다 — 이름으로 가리키면 모음 이름을 바꾸는 순간 바닥글이 조용히 빕니다.
+  // 만드는 법은 supabase/partners.sql 참고. 바닥글에서 빼려면 "" 로 두세요.
+  PARTNER_COL: "partners",
 };

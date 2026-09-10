@@ -645,6 +645,23 @@ drop trigger if exists items_resolve_category on public.items;
 create trigger items_resolve_category
   before insert or update on public.items for each row execute function public.resolve_item_category();
 
+-- ---------- 자료를 지우면 모음에서도 뺀다 ----------
+-- 안 빼면 모음에 id 만 남는다. 화면에는 안 보이지만 그 자리는 **예약돼 있다.**
+-- 자료 id 는 선착순이고 JSON 가져오기가 파일에 적힌 id 를 그대로 쓰므로,
+-- 아무 로그인 사용자나 그 id 로 자료를 새로 만들어 남의 모음에 들어앉을 수 있다.
+-- 바닥글에 나가는 제휴 모음에서는 그게 곧 사이트 전면 링크 탈취가 된다.
+create or replace function public.strip_deleted_from_collections()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.collections
+     set item_ids = array_remove(item_ids, old.id), updated_at = now()
+   where item_ids @> array[old.id];
+  return old;
+end $$;
+drop trigger if exists items_strip_from_collections on public.items;
+create trigger items_strip_from_collections
+  after delete on public.items for each row execute function public.strip_deleted_from_collections();
+
 -- ---------- 실시간 반영 ----------
 do $$
 begin
