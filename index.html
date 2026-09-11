@@ -655,29 +655,88 @@ function SupabaseStore(){
   const toCol=c=>({id:c.id,title:c.title,desc:c.desc||'',item_ids:c.itemIds||[],by:c.by||'',owner_id:c.ownerId||me.id,created_at:c.createdAt||new Date().toISOString(),updated_at:c.updatedAt||null});
   const fromRep=r=>({id:r.id,itemId:r.item_id,reason:r.reason,note:r.note||'',by:r.by||'',reporterId:r.reporter_id,createdAt:r.created_at});
   const fail=(e,what)=>{ const err=new Error(e.message||what); err.code=e.code||'error'; throw err; };
-  // 읽기
+  /* 시각 비교에는 `performance.now()` 를 쓴다. `Date.now()` 는 절전 복귀·시계 보정으로 뒤로 뛸 수 있어
+     "둘 중 무엇이 먼저인가" 를 묻는 데 쓰면 안 된다. */
+  const now=()=>performance.now();
+  let liveAt=0,        // 채널이 마지막으로 살아난 시각 (0 이면 지금 끊긴 것으로 본다)
+      everLive=false,  // 한 번이라도 붙은 적이 있는가
+      inflight=null, inflightAt=0, queued=null,
+      fillAt=0, fillTimer=0;
+  /* 테이블마다 "몇 번째로 쏜 조회인가" 와 "몇 번째를 화면에 반영했는가".
+     같은 테이블을 동시에 읽으면 **늦게 도착한 옛 응답이 새 응답을 덮는다.**
+     전체 조회가 느리게 도는 사이 실시간이 물어다 준 새 자료가 그렇게 사라졌다. */
+  const shot={}, applied={};
+  // 읽기. 성공했는지를 돌려준다.
   async function load(t){
+    const seq=(shot[t]=(shot[t]||0)+1);
+    const take=()=>{ if(seq<(applied[t]||0)) return false; applied[t]=seq; return true; };  // 옛 응답이면 버린다
+    let ok=true;
     if(t==='items'){ const {data,error}=await sb.from('items').select('*').order('created_at',{ascending:false}).limit(5000);
       // 조회 실패를 조용히 넘기면 '아직 항목이 없습니다' 로 잘못 보인다
-      if(error){ DB_ERR=error.message||'자료를 불러오지 못했습니다'; setConn('err'); } else { DB_ERR=''; D.items=(data||[]).map(fromItem); } }
-    if(t==='collections'){ const {data,error}=await sb.from('collections').select('*'); if(!error) D.cols=(data||[]).map(fromCol); }
-    if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(!error) D.reports=(data||[]).map(fromRep); } }
-    if(t==='settings'){ const {data}=await sb.from('settings').select('value').eq('key','categories').maybeSingle();
+      // 성공했으면 알약을 채널 상태로 되돌린다. 이게 없으면 한 번 실패해 빨개진 알약이
+      // 그 뒤 조회가 다 성공해도 채널 상태가 바뀌기 전까지 영영 빨간 채로 남는다.
+      if(error){ DB_ERR=error.message||'자료를 불러오지 못했습니다'; setConn('err'); ok=false; }
+      else if(take()){ DB_ERR=''; D.items=(data||[]).map(fromItem); if(liveAt) setConn('db'); } }
+    if(t==='collections'){ const {data,error}=await sb.from('collections').select('*'); if(error) ok=false; else if(take()) D.cols=(data||[]).map(fromCol); }
+    if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(error) ok=false; else if(take()) D.reports=(data||[]).map(fromRep); } }
+    if(t==='settings'){ const {data,error}=await sb.from('settings').select('value').eq('key','categories').maybeSingle();
       // list 말고도 들어 있는 값(버전 표시 등)은 그대로 들고 있다가 저장할 때 돌려준다
-      if(data&&data.value&&typeof data.value==='object') D.catsRaw=data.value;
-      const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; }
-    if(t==='votes'){ if(!me.id){ D.myVotes=[]; } else { const {data}=await sb.from('votes').select('item_id'); D.myVotes=(data||[]).map(r=>r.item_id); } }
+      if(error) ok=false; else if(take()){
+        if(data&&data.value&&typeof data.value==='object') D.catsRaw=data.value;
+        const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; } }
+    if(t==='votes'){ if(!me.id){ D.myVotes=[]; } else { const {data,error}=await sb.from('votes').select('item_id'); if(error) ok=false; else if(take()) D.myVotes=(data||[]).map(r=>r.item_id); } }
     emit();
+    return ok;
   }
-  async function loadAll(){ await Promise.all(['items','collections','settings','reports','votes'].map(load)); }
+  /* 전체 다시 읽기. 진행 중인 것이 있으면 그것을 나눠 쓴다 —
+     링크를 새 탭으로 열고 곧 돌아오는 흔한 동작만으로도 전체 조회가 여러 번 겹쳐 떴다.
+     다만 **끊겨 있던 동안 나간 조회는 나눠 주지 않는다.** 그건 재연결 전 스냅샷이라,
+     놓친 변경을 메우려고 부른 쪽에게 옛 자료를 쥐여 주게 된다.
+     기다리는 줄은 하나만 둔다. 여럿이 겹치면 전체 조회가 그 수만큼 줄줄이 나간다. */
+  function loadAll(fresh){
+    if(inflight&&!fresh&&inflightAt>=liveAt) return inflight;
+    if(inflight) return queued||(queued=inflight.catch(()=>{}).then(()=>{ queued=null; return loadAll(fresh); }));
+    inflightAt=now();
+    inflight=Promise.all(['items','collections','settings','reports','votes'].map(t=>load(t)))
+      .finally(()=>{ inflight=null; });
+    return inflight;
+  }
   // 실시간: 바뀐 테이블만 다시 읽기 (지연 합치기)
-  const timers={}; const bump=t=>{ clearTimeout(timers[t]); timers[t]=setTimeout(()=>load(t),250); };
+  const timers={}; const bump=t=>{ clearTimeout(timers[t]); timers[t]=setTimeout(()=>{ load(t).catch(()=>{}); },250); };
   sb.channel('toolbox')
     .on('postgres_changes',{event:'*',schema:'public',table:'items'},()=>bump('items'))
     .on('postgres_changes',{event:'*',schema:'public',table:'collections'},()=>bump('collections'))
     .on('postgres_changes',{event:'*',schema:'public',table:'reports'},()=>bump('reports'))
     .on('postgres_changes',{event:'*',schema:'public',table:'settings'},()=>bump('settings'))
-    .subscribe(status=>{ if(status==='SUBSCRIBED') setConn('db'); else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT') setConn('err'); });
+    .subscribe(status=>{
+      // SUBSCRIBED 가 아닌 상태는 전부 끊긴 것으로 본다. 예전에는 CHANNEL_ERROR·TIMED_OUT 만 봐서
+      // 소켓이 조용히 닫히는 CLOSED 일 때 알약이 초록으로 남았다 — 끊긴 줄 모르는 것이 가장 나쁘다.
+      if(status!=='SUBSCRIBED'){ liveAt=0; setConn('err'); return; }
+      const wasDown=everLive&&!liveAt;
+      everLive=true; liveAt=now(); setConn('db');
+      /* 끊겼다 돌아왔으면 그 사이 놓친 변경을 여기서 메운다.
+         `postgres_changes` 는 다시 붙어도 **끊겨 있던 동안의 변경을 돌려주지 않는다.**
+         탭을 켜 둔 채로 끊긴 경우, 이것이 없으면 아무도 다시 받지 않아 목록이 무한히 낡는다. */
+      if(wasDown) fillAfterReconnect();
+    });
+  /* 재연결 메우기. **진행 중인 조회에 합치면 안 된다** — 그 조회의 쿼리는 끊겨 있던 동안 나갔으므로
+     결과가 재연결 전 스냅샷이다. 회복 장치가 가장 필요한 순간에만 작동하지 않게 된다.
+     지켜야 할 것은 하나다: 재연결한 시각 뒤에 **새로 쏜** 조회가 반드시 한 번 있어야 한다. */
+  function fillAfterReconnect(){
+    if(document.visibilityState!=='visible') return;   // 숨은 탭은 복귀 때 어차피 전부 다시 받는다
+    // 지하철처럼 연결이 들락날락하면 재연결마다 전체 조회가 나간다. 15초에 한 번으로 바닥을 깐다.
+    const wait=15000-(now()-fillAt);
+    if(wait>0){ if(!fillTimer) fillTimer=setTimeout(()=>{ fillTimer=0; fillAfterReconnect(); },wait); return; }
+    fillAt=now(); loadAll(true);
+  }
+  /* 탭 복귀. **건너뛰지 않고 그냥 다시 받는다.**
+     원래 계획은 "5분 쿨다운" 이었고, 그다음엔 "연결이 안 끊겼으면 건너뛰기" 까지 만들어 봤다. 둘 다 버렸다.
+     - 아끼는 것은 짧은 복귀에서 요청 8건 중 5건뿐이고, 조사해 보니 **절감액이 0원**이다
+       (Supabase 전송량은 무료 한도의 1% 남짓이다. 돈이 나가는 곳은 Claude API 하나다)
+     - 대가로 자료가 **조용히 낡는** 경로가 계속 나왔다. 잠자기에서 깨면 소켓이 죽었는데도
+       한동안 살아 있는 것처럼 보이고, 부분 조회가 실패해도 표시가 없고, 늦게 온 옛 응답이 새 자료를 덮는다.
+       그 하나하나를 막는 장치를 쌓는 것보다 **매번 다시 받는 쪽이 싸고 확실하다.**
+     여기서 아무것도 안 해도, 위의 재연결 메우기가 "탭을 켜 둔 채 끊긴" 경우를 맡는다. */
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') loadAll(); });
   // 인증
   async function applySession(session){
@@ -685,8 +744,11 @@ function SupabaseStore(){
     if(!u){ Object.assign(me,{id:null,name:'',email:'',admin:false,suggestedName:''}); }
     else{
       me.id=u.id; me.email=u.email||''; me.provider=(u.app_metadata&&u.app_metadata.provider)||'email';
-      const {data}=await sb.from('profiles').select('name,is_admin').eq('id',u.id).maybeSingle();
-      me.name=(data&&data.name)||''; me.admin=!!(data&&data.is_admin);
+      // 조회가 **실패**했을 때는 들고 있던 값을 그대로 둔다. 예전에는 실패도 "이름 없음·운영자 아님" 으로 읽어,
+      // 탭을 다시 볼 때마다 도는 이 경로에서 네트워크가 한 번만 흔들려도 운영자 메뉴가 통째로 사라졌다.
+      // (행이 정말 없는 경우는 error 없이 data=null 로 오므로 아래 갱신을 탄다)
+      const {data,error}=await sb.from('profiles').select('name,is_admin').eq('id',u.id).maybeSingle();
+      if(!error){ me.name=(data&&data.name)||''; me.admin=!!(data&&data.is_admin); }
       // 소셜 로그인 첫 진입: 카카오·구글 닉네임은 "제안"만 한다. 저장하지 않는다.
       // 카카오 프로필 이름은 본명인 경우가 많고, 자료를 올리면 누구에게나 공개되기 때문이다.
       // 이름 창(openNameForm)이 이 값을 미리 채워 보여 주고, 사용자가 확인·수정한 뒤에 저장된다.
@@ -696,6 +758,12 @@ function SupabaseStore(){
     authCb&&authCb(me);
     await Promise.all([load('reports'),load('votes')]);
   }
+  /* supabase-js 는 탭을 다시 볼 때마다 **같은 사람으로** SIGNED_IN 을 다시 쏜다(BroadcastChannel 로 다른 탭까지).
+     그때마다 applySession 이 돌아 profiles·reports·votes 를 다시 받는다.
+     **그걸 걸러 내지 않기로 했다** (2026-09-11). 걸러 보니 조용히 낡는 곳이 다섯 군데 나왔다 —
+     운영자 권한이 생겨도 검토함이 "신고 없음" 으로 남고(reports 는 RLS 가 좁혀 준 목록이라 저절로 안 넓어진다),
+     권한이 없어져도 남의 신고가 화면에 남고, votes 는 실시간 발행 목록에 없어 추천 표시가 영영 낡는다.
+     아끼는 것은 탭 복귀 8건 중 2건뿐이다. 요청을 줄이는 몫은 위의 연속성 판정이 이미 다 했다(8→3). */
   sb.auth.onAuthStateChange((_ev,session)=>{ applySession(session); });
   return {
     kind:'db',
