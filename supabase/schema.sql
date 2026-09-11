@@ -435,6 +435,29 @@ alter table public.reports     add  constraint reports_id_fmt     check (id ~ '^
 alter table public.reports     drop constraint if exists reports_item_id_fmt;
 alter table public.reports     add  constraint reports_item_id_fmt check (item_id ~ '^[A-Za-z0-9_-]{1,64}$');
 
+-- ---------- 신고: 고아와 중복을 막는다 ----------
+-- 지금까지 `reports.item_id` 에 외래키가 없었다. 그래서 자료를 지워도 신고가 남고,
+-- 검토함에 "이미 삭제된 항목" 줄로 쌓였다. 게다가 자료가 없으면 `manages_item` 이 분야를 알 수 없어
+-- **분야 담당자에게는 보이지도 않는 신고**가 된다. 운영자만 치울 수 있고, 아무도 안 치우면 영영 남는다.
+-- 같은 사람이 같은 자료를 몇 번이든 신고할 수도 있었다. 화면은 버튼을 "신고됨" 으로 막지만
+-- 새로고침하거나 다른 창을 쓰면 그대로 뚫린다 — 규칙이 화면에만 있었다.
+--
+-- **제약을 걸기 전에 이미 쌓인 것을 먼저 치운다.** 순서를 바꾸면 제약이 안 붙고 그 자리에서 실패한다.
+delete from public.reports r
+ where not exists (select 1 from public.items i where i.id = r.item_id);
+-- 같은 사람·같은 자료가 여럿이면 **가장 먼저 낸 것**만 남긴다 (그게 실제로 신고한 시점이다)
+delete from public.reports r using public.reports k
+ where r.reporter_id is not null and r.reporter_id = k.reporter_id and r.item_id = k.item_id
+   and (r.created_at, r.id) > (k.created_at, k.id);
+
+alter table public.reports drop constraint if exists reports_item_fk;
+alter table public.reports add  constraint reports_item_fk
+  foreign key (item_id) references public.items(id) on delete cascade;
+-- 한 사람이 한 자료에 한 번. 계정이 지워져 `reporter_id` 가 비워진 옛 신고는 이 제한을 받지 않는다
+-- (그 신고들끼리는 서로 누구인지 알 수 없으므로 하나로 합칠 근거가 없다).
+create unique index if not exists reports_one_per_person
+  on public.reports (item_id, reporter_id) where reporter_id is not null;
+
 -- 길이 제한: 한 사람이 DB·전송량을 부풀리지 못하게 (모든 방문자가 items 전체를 받아 간다)
 alter table public.items drop constraint if exists items_len;
 alter table public.items add  constraint items_len check (
