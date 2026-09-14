@@ -469,8 +469,13 @@ alter table public.items add  constraint items_len check (
 -- 추천 수(votes)는 votes 표의 트리거가 관리하는 파생 값이다. 사용자가 REST 로 직접 고치지 못하게
 -- 표 단위 update 권한을 걷고 votes 를 뺀 나머지 컬럼만 다시 준다.
 -- (컬럼만 revoke 하면 표 단위 권한이 남아 효과가 없다. 동기화 트리거는 security definer 라 영향받지 않는다.)
+-- owner_id 도 뺀다 (2026-09-14). 넣어 두면 분야 담당자가 자기 분야 자료의 주인을 아무 계정으로, 또는 null 로
+-- 바꿀 수 있었다. items_update 의 with check 가 "분야를 하나라도 맡은 사람" 이면 통과시키기 때문이고,
+-- 넘겨줄 계정 UUID 는 공개로 내려가는 owner_id 에서 얼마든지 얻는다.
+-- 화면은 고칠 때 owner_id 를 보내지 않는다(put·putCol 이 빼고, patch 는 고를 컬럼만 보낸다). 새 글은 insert 라 이 권한과 무관하다.
+-- 표 단위 revoke 는 예전에 준 컬럼 권한(owner_id 포함)까지 함께 걷으므로, 이 파일을 다시 돌리면 정리된다.
 revoke update on public.items from authenticated, anon;
-grant  update (type, title, url, lang, body, category, category_id, sub, tags, by, owner_id, updated_at)
+grant  update (type, title, url, lang, body, category, category_id, sub, tags, by, updated_at)
   on public.items to authenticated;
 
 -- checked_at 은 운영자·주 관리자가 "살펴봤다" 고 남기는 부기 값이다. 컬럼 쓰기 권한을 주면
