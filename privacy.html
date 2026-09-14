@@ -60,15 +60,26 @@
         (profiles 는 cascade. 카카오 계정은 last_sign_in_at 이 있어 걸리지 않는다.)
      d) AI 사용 기록 정리 (3장). 예: pg_cron 하루 한 번  delete from public.ai_usage where day < current_date - 1;
         한도 함수(ai_take_quota·ai_refund_quota)는 current_date 행만 읽으므로 영향이 없다.
-     e) 인증 감사 기록 (3장). 대시보드에서 auth.audit_log_entries 에 기록을 쓰는 설정인지 확인. 쓴다면 이 표에는 외래키가 없어
-        delete-user.sql 이 계정을 지워도 이메일(actor_username)·IP 가 남는다. delete-user.sql (4) 앞에
-          delete from auth.audit_log_entries where payload->>'actor_id' = v_uid::text;
-        를 넣고 보존 기간을 정할 것.
+     e) 인증 감사 기록 (3장). 이 표에는 외래키가 없어 계정을 지워도 이메일(actor_username)·IP 가 남는다.
+        탈퇴 때 그 사람이 actor 인 행을 지우는 것은 delete-user.sql (4) 에 반영했다(payload->>'actor_id' 로만 찾는다). 남은 것:
+        - 대시보드 Authentication › Configuration › Audit Logs 의 "Write audit logs to the database" 가 켜져 있는지 확인
+          (Supabase 는 새 프로젝트 기본값을 공개하지 않고, 끄면 이미 쌓인 행이 지워진다는 안내도 없다).
+          켜져 있거나 행이 남아 있으면(select count(*) from auth.audit_log_entries;) 보존 기간을 정하고 지우는 작업을 둘 것.
+        - (4) 가 못 지우는 행: 운영자가 대시보드(관리자 API)로 그 사용자를 고치거나 만든 행은 actor 가 관리자 역할(actor_id 는 0 UUID)이고
+          traits.user_id·user_email 에 그 사람이 담긴다(supabase/auth internal/api/admin.go, auth.go requireAdmin).
+          (4) 에  or payload->'traits'->>'user_id' = v_uid::text  를 더하면 3장·4장 문장을 "그 이용자의 기록" 으로 넓힐 수 있다.
+        - daily-privacy-cleanup 은 auth.users 만 지운다. 코드를 요청할 때 그 계정을 actor 로 쓴 행(UserConfirmationRequestedAction·
+          UserRecoveryRequestedAction, actor_username = 입력한 이메일, signup.go·magic_link.go)은 남으므로 위 보존 기간 작업이 이 행도 덮어야 한다.
      f) JSON 백업과 탈퇴 (4장). 내보내기 파일에는 by·ownerId·checkedAt·본문이 들어 있고(index.html:2153, 672),
         가져오기는 DB 에 없는 id 를 파일의 by 그대로 넣으며(index.html:2180), 운영자가 넣는 행은 enforce_author_name 이
         이름을 덮지 않는다(schema.sql:711). **탈퇴 처리 전에 만든 백업 파일을 그대로 가져오지 말 것** — 지운 자료와 원래 이름이 되살아난다.
         탈퇴를 처리하면 보관 중인 백업 파일에서 그 사람의 자료를 지우거나 by 를 '탈퇴한 사용자' 로 바꾼다.
         근본 해결은 enforce_author_name 의 운영자 예외를 없애는 것(그러면 가져온 새 행은 가져온 사람 이름이 된다).
+     g) 사용자 지정 메일 서버(SMTP) (6장). Supabase 기본 메일 서버는 프로젝트 팀원 주소에만, 한 시간에 2통까지 보내므로
+        이메일 로그인은 공개 이용자에게 동작하지 않는다(todo.md "이메일 로그인은 지금도 사실상 못 쓴다").
+        설정한 발송 업체를 6장 수탁자 표와 7장 국외 이전(제28조의8 제2항 각 호 항목 전부)에 더할 것.
+     h) Vercel 의 자체 이용 (6장 Vercel 항목). 이용약관 10.4 는 접속 기록 같은 System Data 를 계약 중에도 끝난 뒤에도 어떤 사업 목적에든 쓸 수 있다고 한다.
+        위탁으로 둘지 제3자 제공으로 적을지 운영자가 판단하고, 결과에 따라 요약·5장·7장 첫 문단의 이전 근거·7-2 이용 목적을 함께 고칠 것(그 자리의 【확인 필요】 참고).
 -->
 <style>
 :root{
@@ -270,16 +281,16 @@ footer{margin-top:3.2em; padding-top:16px; border-top:1px solid var(--line); col
 <div class="tbl"><table>
   <thead><tr><th>정보</th><th>보유 기간</th></tr></thead>
   <tbody>
-    <tr><td>계정 정보<br><span class="muted small">(이메일 주소, 카카오로부터 받은 정보, 계정 식별값, 표시 이름, 가입·로그인 일시)</span></td><td data-label="보유 기간">탈퇴할 때까지. 탈퇴를 요청하면 지체 없이 파기합니다(인증 감사 기록은 아래 ‘Supabase 접속 기록과 인증 감사 기록’ 줄 참고).</td></tr>
-    <tr><td>코드를 요청했지만 한 번도 로그인하지 않은 계정</td><td data-label="보유 기간">코드를 마지막으로 요청한 때부터 1일이 지나면 자동으로 삭제합니다. 그 전이라도 요청하면 지체 없이 파기합니다. <mark class="todo">【확인 필요: 미확인 계정 자동 삭제 작업 적용 확인. 적용 전에는 이 문장이 사실이 아님】</mark></td></tr>
+    <tr><td>계정 정보<br><span class="muted small">(이메일 주소, 카카오로부터 받은 정보, 계정 식별값, 표시 이름, 가입·로그인 일시)</span></td><td data-label="보유 기간">탈퇴할 때까지. 탈퇴를 요청하면 지체 없이 파기합니다(인증 감사 기록은 아래 ‘Supabase 접속 기록과 인증 감사 기록’ 줄, Supabase 내부 백업에 남을 수 있는 사본은 <a href="#s4">4장</a> ‘파기 방법’ 참고).</td></tr>
+    <tr><td>코드를 요청했지만 한 번도 로그인하지 않은 계정</td><td data-label="보유 기간">코드를 마지막으로 요청한 때부터 1일이 지나면 자동으로 삭제합니다. 그 전이라도 요청하면 지체 없이 파기합니다(인증 감사 기록은 아래 ‘Supabase 접속 기록과 인증 감사 기록’ 줄 참고). <mark class="todo">【확인 필요: 미확인 계정 자동 삭제 작업 적용 확인. 적용 전에는 이 문장이 사실이 아님】</mark></td></tr>
     <tr><td>올린 자료·모음</td><td data-label="보유 기간">자료는 올린 사람·운영자·해당 분야 담당자가, 모음은 만든 사람·운영자가 지울 때까지.<br><b>탈퇴할 때</b>: 계정 정보는 지체 없이 파기하고, 올린 자료·모음은 작성자 표시를 ‘탈퇴한 사용자’로 바꾸어 남깁니다. 자료도 지우길 원하면 탈퇴 전에 직접 지우거나 탈퇴 요청 때 함께 요청할 수 있습니다. <mark class="todo">【확인 필요: 운영자 결정】</mark></td></tr>
     <tr><td>추천 기록</td><td data-label="보유 기간">탈퇴하거나 추천한 자료가 지워질 때까지</td></tr>
     <tr><td>신고 기록</td><td data-label="보유 기간">운영자나 분야 담당자가 검토 후 신고를 닫거나, 신고한 자료가 지워질 때까지. 그 전에 신고자가 탈퇴하면 신고자 표시 이름을 ‘탈퇴한 사용자’로 바꾸고 계정과의 연결을 끊습니다. 신고 사유와 설명은 검토를 위해 남깁니다.</td></tr>
     <tr><td>분야 담당자 지정 정보</td><td data-label="보유 기간">운영자가 지정을 해제하거나 담당자가 탈퇴할 때까지</td></tr>
     <tr><td>AI 기능 사용 기록(날짜별 횟수)</td><td data-label="보유 기간">사용한 날의 다음 날까지. 그 뒤에는 자동으로 삭제합니다(탈퇴하면 그때 바로 삭제). <mark class="todo">【확인 필요: AI 사용 기록 자동 삭제 작업 적용 확인. 적용 전에는 이 문장이 사실이 아님】</mark></td></tr>
     <tr><td>로그인 세션 기록<br><span class="muted small">(Supabase 인증 시스템의 IP 주소, 브라우저 정보)</span></td><td data-label="보유 기간">로그아웃하거나 탈퇴할 때까지</td></tr>
-    <tr><td>Supabase 접속 기록과 인증 감사 기록<br><span class="muted small">(인증 감사 기록: 로그인·로그아웃처럼 계정에서 일어난 일을 Supabase가 자동으로 남긴 기록)</span></td><td data-label="보유 기간">운영자가 쓰는 무료 요금제에서 Supabase가 공개한 기록 보존 기간은 API·데이터베이스 기록 1일, 인증 감사 기록 1시간입니다. <mark class="todo">【확인 필요: 인증 감사 기록을 데이터베이스에도 저장하는 설정인지. 저장한다면 보존 기간을 정하고, 탈퇴 처리 때 그 이용자의 감사 기록도 지우도록 할 것】</mark></td></tr>
-    <tr><td>Vercel 접속 기록</td><td data-label="보유 기간">Vercel이 정한 기간 동안 보관합니다(Vercel은 목적에 필요한 최소한의 기간이라고만 밝히고 있습니다). <mark class="todo">【확인 필요: Vercel 접속 기록 보존 기간】</mark></td></tr>
+    <tr><td>Supabase 접속 기록과 인증 감사 기록<br><span class="muted small">(인증 감사 기록: 로그인·로그아웃처럼 계정에서 일어난 일을 Supabase가 자동으로 남긴 기록)</span></td><td data-label="보유 기간">운영자가 쓰는 무료 요금제에서 Supabase가 공개한 기록 보존 기간은 API·데이터베이스 기록 1일, 인증 감사 기록 1시간입니다. 인증 서버 기록으로 월간 사용자 수를 확인하는 방법을 설명한 Supabase 안내 문서에는 무료 요금제에서 최근 1일치 기록을 볼 수 있다고 적혀 있고, 실시간 변경 알림·서버 함수 기록의 기간은 따로 적혀 있지 않습니다. 그 안내 문서는 이런 보존 기간을 운영자가 기록을 볼 수 있는 기간이라고 설명하며, Supabase가 내부에서 기록을 얼마 동안 보관하는지는 공개되어 있지 않습니다. 인증 감사 기록이 프로젝트 데이터베이스에도 남아 있으면, 탈퇴를 처리할 때 그 이용자가 한 일로 남은 기록을 함께 지웁니다(<a href="#s4">4장</a>). <mark class="todo">【확인 필요: 실시간 변경 알림·서버 함수 기록의 보존 기간과 Supabase 내부 사본의 보관 기간을 <a href="#s7-1">7-1</a> 이전 국가와 함께 Supabase Pte. Ltd.(privacy@supabase.io)에 문의할 것. 답이 없으면 7-1 보유·이용 기간을 채울 수 없음】</mark> <mark class="todo">【확인 필요: Supabase 관리 화면 Authentication › Configuration › Audit Logs의 ‘Write audit logs to the database’ 설정(Supabase는 새 프로젝트의 기본값을 공개하지 않음). 켜져 있거나 예전 기록이 남아 있으면 데이터베이스에 남는 감사 기록의 보존 기간을 정해 이 칸에 적고 지우는 작업을 둘 것. 이 작업은 탈퇴 처리로 지워지지 않는 기록, 곧 운영자가 관리 화면에서 그 이용자 계정을 고치거나 만든 기록(이용자 이메일이 담김)과 매일 정리 작업이 지운 미로그인 계정의 기록(입력한 이메일이 담김)도 지워야 함. 꺼져 있고 남은 기록이 없으면 ‘데이터베이스에는 저장하지 않습니다’로 고칠 것】</mark></td></tr>
+    <tr><td>Vercel 접속 기록</td><td data-label="보유 기간">Vercel이 무료 요금제에 대해 공개한 보관 기간은 요청 기록(런타임 로그) 1시간, 관측(Observability) 데이터 12시간입니다. Vercel 안내 문서에 따르면 보안(방화벽) 화면에서는 최근 24시간까지의 접속을 IP 주소·브라우저 정보·요청 경로 등으로 나누어 볼 수 있지만, 그 기록의 보관 기간은 공개되어 있지 않습니다. Vercel이 내부에서 이 기록들을 얼마 동안 보관하는지도 공개되어 있지 않습니다. Vercel 개인정보 처리방침은 목적에 필요한 최소한의 기간 동안 보관한다고 적고 있지만, 이용약관(10.4)은 접속 기록 같은 서비스 데이터를 계약 기간 중에도, 끝난 뒤에도 어떤 사업 목적에든 쓸 수 있다고 적고 있습니다(<a href="#s6">6장</a> 참고). <mark class="todo">【확인 필요: 방화벽 기록과 Vercel 내부 사본의 보관 기간을 <a href="#s7-2">7-2</a> 이전 국가와 함께 privacy@vercel.com에 문의할 것. 답이 없으면 7-2 보유·이용 기간을 채울 수 없음】</mark></td></tr>
     <tr><td>AI 요청 내용(Anthropic)</td><td data-label="보유 기간">Anthropic이 받거나 생성한 날부터 30일 이내에 삭제합니다. 다만 Anthropic 이용정책 위반으로 판정되면 입력·출력은 최대 2년, 안전 분류 점수(요청 내용이 이용정책에 어긋나는지 자동으로 판별한 점수)는 최대 7년 보관됩니다(Anthropic 공개 기준).</td></tr>
     <tr><td>브라우저 저장소</td><td data-label="보유 기간"><a href="#s10">10장</a> 참고</td></tr>
   </tbody>
@@ -293,11 +304,12 @@ footer{margin-top:3.2em; padding-top:16px; border-top:1px solid var(--line); col
   <li>분야 담당자로 지정되어 있으면 지정을 해제합니다.</li>
   <li>올린 자료·모음을 <a href="#s3">3장</a>에서 정한 방식으로 처리합니다.</li>
   <li>보낸 신고가 남아 있으면 신고자 표시 이름을 ‘탈퇴한 사용자’로 바꿉니다.</li>
+  <li>데이터베이스에 남아 있는 인증 감사 기록(<a href="#s3">3장</a>) 가운데 그 이용자가 한 일로 남은 기록을 지웁니다.</li>
   <li>마지막으로 계정을 삭제합니다. 이때 표시 이름, 추천 기록(추천 수도 함께 줄어듦), AI 기능 사용 기록이 함께 삭제되고, 남긴 자료·모음·신고와 계정의 연결이 끊깁니다.</li>
 </ol>
 <h3>파기 방법</h3>
 <ul>
-  <li>전자 파일 형태의 개인정보는 데이터베이스에서 삭제해 복원할 수 없게 합니다(「개인정보 보호법 시행령」 제16조). 운영자가 쓰는 Supabase 무료 요금제에는 운영자가 내려받거나 복원에 쓸 수 있는 자동 백업이 없습니다. <mark class="todo">【확인 필요: Supabase 내부에 운영자가 볼 수 없는 백업 사본이 남는지, 남는다면 보관 기간】</mark></li>
+  <li>전자 파일 형태의 개인정보는 데이터베이스에서 삭제해 운영자가 복원할 수 없게 합니다(「개인정보 보호법 시행령」 제16조). 운영자가 쓰는 Supabase 무료 요금제에는 운영자가 내려받거나 복원에 쓸 수 있는 자동 백업이 없습니다. 다만 프로젝트가 일시 정지되면(무료 요금제는 1주일 동안 활동이 없으면 정지됩니다) Supabase가 백업을 보관해, 운영자는 정지된 때부터 1년 안에 프로젝트를 복원할 수 있습니다. 또 Supabase는 데이터 처리 부속서에서 고객 프로젝트를 기본으로 매일 백업한다고 밝히고 있어, 지운 정보가 운영자가 볼 수 없는 Supabase 내부 백업에 남을 수 있습니다. 평소 내부 백업의 보관 기간은 Supabase가 공개하지 않았고, 데이터 처리 부속서는 계약이 끝나고 30일이 지나면 하위 처리자가 가진 것을 포함한 모든 사본을 지운다고 적고 있습니다. <mark class="todo">【확인 필요: 무료 요금제 프로젝트의 내부 백업 보관 기간을 Supabase Pte. Ltd.(privacy@supabase.io)에 문의해 ‘백업에서는 최대 N일 뒤 지워집니다’로 적고, <a href="#s3">3장</a> 계정 정보 줄과 <a href="#s7-1">7-1</a> 보유·이용 기간이 이 문장을 가리키게 할 것. 그 전에는 시행령 제16조의 ‘복원이 불가능한 방법으로 영구 삭제’를 했다고 쓸 수 없음】</mark></li>
   <li>운영자가 ‘JSON 내보내기’로 백업 파일을 만들어 보관하는 경우, 그 파일에도 표시 이름, 계정 식별값, 자료 내용이 들어 있습니다. 탈퇴를 처리하면 보관 중인 백업 파일에서도 그 이용자의 정보를 지우거나 가린 뒤 보관하며, 탈퇴 전에 만든 백업 파일을 그대로 되살리지 않습니다. <mark class="todo">【확인 필요: 운영자가 JSON 백업 파일을 만들어 보관하는지, 보관한다면 어디에 얼마 동안 보관하는지】</mark></li>
   <li>종이 문서로는 개인정보를 처리하지 않습니다.</li>
 </ul>
@@ -317,14 +329,15 @@ footer{margin-top:3.2em; padding-top:16px; border-top:1px solid var(--line); col
 <div class="tbl"><table>
   <thead><tr><th>수탁자</th><th>위탁 업무</th><th>재수탁자 확인</th></tr></thead>
   <tbody>
-    <tr><td>Supabase, Inc.</td><td data-label="위탁 업무">회원 인증(이메일 로그인 코드 발송, 카카오 로그인 연결, 로그인 세션 관리), 데이터베이스 저장·운영, 실시간 변경 알림, AI 기능을 중계하는 서버 함수 실행, 이 과정의 접속 기록 처리</td><td data-label="재수탁자 확인"><a href="https://supabase.com/privacy" rel="noopener noreferrer">개인정보 처리방침</a><br><a href="https://supabase.com/legal/customer-resources/subprocessor-list" rel="noopener noreferrer">하위 처리자 목록</a></td></tr>
-    <tr><td>Vercel Inc.</td><td data-label="위탁 업무">웹사이트 파일 제공(호스팅)과 이 과정의 접속 기록 처리</td><td data-label="재수탁자 확인"><a href="https://vercel.com/legal/privacy-policy" rel="noopener noreferrer">개인정보 처리방침</a><br><a href="https://security.vercel.com/" rel="noopener noreferrer">보안 센터(하위 처리자)</a></td></tr>
+    <tr><td>Supabase Pte. Ltd.<br><span class="muted small">(싱가포르 법인)</span></td><td data-label="위탁 업무">회원 인증(이메일 로그인 코드 발송, 카카오 로그인 연결, 로그인 세션 관리), 데이터베이스 저장·운영, 실시간 변경 알림, AI 기능을 중계하는 서버 함수 실행, 이 과정의 접속 기록 처리</td><td data-label="재수탁자 확인"><a href="https://supabase.com/privacy" rel="noopener noreferrer">개인정보 처리방침</a><br><a href="https://supabase.com/legal/customer-resources/subprocessor-list" rel="noopener noreferrer">하위 처리자 목록</a></td></tr>
+    <tr><td>Vercel Inc.</td><td data-label="위탁 업무">웹사이트 파일 제공(호스팅)과 보안(디도스 공격 방어 등), 이 과정의 접속 기록 처리</td><td data-label="재수탁자 확인"><a href="https://vercel.com/legal/privacy-notice" rel="noopener noreferrer">개인정보 처리방침</a><br><a href="https://security.vercel.com/" rel="noopener noreferrer">보안 센터(하위 처리자)</a></td></tr>
     <tr><td>Anthropic, PBC</td><td data-label="위탁 업무">AI 기능 요청 처리(분야·태그 제안, 자료 정리 제안, 분야에 넣을 자료 제안)</td><td data-label="재수탁자 확인"><a href="https://www.anthropic.com/legal/privacy" rel="noopener noreferrer">개인정보 처리방침</a><br><a href="https://trust.anthropic.com/subprocessors" rel="noopener noreferrer">하위 처리자 목록</a></td></tr>
   </tbody>
 </table></div>
 <ul>
-  <li>수탁자가 다시 위탁하는 업체(재수탁자)와 그 업무는 위 표의 링크에서 확인할 수 있습니다.</li>
-  <li>운영자는 위탁 계약에 「개인정보 보호법」 제26조 제1항에서 정한 사항이 포함되도록 하고, 수탁자가 개인정보를 안전하게 처리하는지 살핍니다. <mark class="todo">【확인 필요: 수탁자별 데이터 처리 계약(DPA)이 적용되는지 확인】</mark></li>
+  <li>수탁자가 다시 위탁하는 업체(재수탁자)와 그 업무는 위 표의 링크에서 확인할 수 있습니다. <mark class="todo">【확인 필요: 공개 전에 Supabase에 사용자 지정 메일 서버(SMTP)를 설정해야 함(기본 메일 서버는 프로젝트 팀원 주소로만, 한 시간에 2통까지 보내 공개 이용자는 이메일로 로그인할 수 없음). 설정한 메일 발송 업체를 위 수탁자 표와 <a href="#s7">7장</a> 국외 이전(항목, 국가, 시기와 방법, 이전받는 자와 연락처, 이용 목적, 보유·이용 기간)에 더할 것】</mark></li>
+  <li>운영자는 위탁 계약에 「개인정보 보호법」 제26조 제1항에서 정한 사항이 포함되도록 하고, 수탁자가 개인정보를 안전하게 처리하는지 살핍니다. Supabase의 데이터 처리 부속서(DPA)는 서비스 약관에 포함되어 있고 요금제 구분이 없어, 운영자가 쓰는 무료 요금제에도 따로 서명하지 않고 적용됩니다. <mark class="todo">【확인 필요: Supabase 데이터 처리 부속서가 「개인정보 보호법」 제26조 제1항 제1·2호와 시행령 제28조 제1항 제1~5호(위탁 목적과 범위, 재위탁 제한, 접근 제한 등 안전성 확보 조치, 관리 현황 점검 등 감독, 손해배상 등 책임)를 모두 담는지 조항별로 대조할 것. 운영자는 이 부속서를 고칠 수 없으므로, 빠진 사항이 있으면 Supabase에 대해서는 이 항목의 첫 문장을 쓸 수 없음】</mark> <mark class="todo">【확인 필요: Vercel 데이터 처리 부속서는 Pro·Enterprise 요금제 고객에게 적용된다고 적혀 있고 무료(Hobby) 요금제는 언급이 없음(이용약관 10.1은 부속서를 포함한다고 적음). privacy@vercel.com에 무료 요금제 적용 여부를 물어볼 것. 적용되지 않으면 Vercel에 대해서는 이 항목의 첫 문장을 쓸 수 없고, 적용되더라도 위 Supabase와 같은 조항별 대조를 마쳐야 쓸 수 있음】</mark> <mark class="todo">【확인 필요: Anthropic에 데이터 처리 계약(DPA)이 적용되는지 확인】</mark></li>
+  <li>Vercel 이용약관은 Vercel이 접속 기록 같은 서비스 데이터에 든 개인정보를 스스로 처리 목적을 정하는 자(컨트롤러) 또는 처리자로서 처리한다고 적고(10.1), 이 데이터를 계약 기간 중에도, 끝난 뒤에도 어떤 사업 목적에든 쓸 수 있다고 적고 있습니다(10.4). 외부에는 모은 형태나 개인을 알아볼 수 없는 형태로만 공개한다고 합니다. 데이터 처리 부속서는 서비스 이용 중 생기는 데이터 가운데 개인정보에 해당하는 부분을 Vercel이 컨트롤러로서 자기 개인정보 처리방침에 따라 처리한다고 적고 있지만, 이 부속서가 무료 요금제에 적용되는지는 위 항목처럼 확인되지 않았습니다. <mark class="todo">【확인 필요: 운영자 판단. Vercel이 자기 목적으로도 쓰는 이 부분을 위탁으로 적어도 되는지, <a href="#s5">5장</a> 제3자 제공으로 따로 적어야 하는지. 수탁자는 위탁받은 업무 범위를 넘어 개인정보를 이용할 수 없으므로(「개인정보 보호법」 제26조 제5항) 위탁으로 두는 것 자체가 이 조항과 맞지 않을 수 있음. 어느 쪽으로 정하든 요약의 ‘제3자에게 제공하지 않습니다’, 5장, <a href="#s7">7장</a> 첫 문단의 이전 근거(제28조의8 제1항 제3호 가목은 처리위탁·보관만 해당), <a href="#s7-2">7-2</a> 이용 목적(Vercel 자신의 이용이 빠져 있음)을 함께 고칠 것】</mark></li>
   <li>위탁 업무의 내용이나 수탁자가 바뀌면 지체 없이 이 처리방침에 반영합니다.</li>
   <li>카카오는 수탁자가 아니라, 이용자의 동의를 받아 서비스에 로그인 정보를 제공하는 곳입니다(<a href="#s2-3">2-3</a>).</li>
 </ul>
@@ -333,23 +346,23 @@ footer{margin-top:3.2em; padding-top:16px; border-top:1px solid var(--line); col
 <h2 id="s7">7. 개인정보의 국외 이전</h2>
 <p>운영자는 이용자와의 서비스 이용계약을 이행하기 위해 개인정보 처리를 국외 사업자에게 위탁하고 국외에 보관합니다. 「개인정보 보호법」 제28조의8 제1항 제3호 가목(계약 이행을 위한 국외 처리위탁·보관)에 따라 아래 사항을 이 처리방침에 공개합니다. 로그인하지 않은 방문자의 접속 기록도 방문자가 요청한 페이지를 제공하기 위한 처리위탁·보관으로서 같은 근거에 따릅니다.</p>
 
-<h3 id="s7-1">7-1. Supabase, Inc.</h3>
+<h3 id="s7-1">7-1. Supabase Pte. Ltd.</h3>
 <div class="tbl"><table class="kv"><tbody>
-  <tr><th>이전받는 자와 연락처</th><td>Supabase, Inc. · privacy@supabase.com</td></tr>
-  <tr><th>이전 국가</th><td>일본(데이터베이스 저장 위치: Amazon Web Services 도쿄 지역 데이터센터), 미국(Supabase, Inc.) <mark class="todo">【확인 필요: 로그인·서버 함수를 처리하는 서버와 재수탁자의 소재 국가】</mark></td></tr>
+  <tr><th>이전받는 자와 연락처</th><td>Supabase Pte. Ltd.(싱가포르) · privacy@supabase.io (Supabase 데이터 처리 부속서에 적힌 연락처)<br><span class="muted small">재수탁자 Supabase, Inc.(미국) · privacy@supabase.com (Supabase 개인정보 처리방침의 문의처)</span></td></tr>
+  <tr><th>이전 국가</th><td>일본(데이터베이스와 인증 서버: Amazon Web Services 도쿄 지역 데이터센터), 싱가포르(Supabase Pte. Ltd.가 있는 나라), 미국(Supabase, Inc.가 있는 나라) <mark class="todo">【확인 필요: 아래 회색 글에서 Supabase가 공개하지 않았다고 적은 나라와, 데이터를 받는 재수탁자(적어도 Cloudflare)의 이름과 나라를 모두 적어야 공개할 수 있음. Supabase Pte. Ltd.(privacy@supabase.io)에 문의할 것. 서버 함수는 호출에 x-region: ap-northeast-1 머리글을 붙이면 도쿄에서 실행되어 일본으로 적을 수 있고, 응답 머리글 x-sb-edge-region으로 실제 지역을 확인할 수 있음】</mark><br><span class="muted small">Supabase 데이터 처리 부속서는 나라를 따로 적지 않고, Supabase와 하위 처리자가 시설을 둔 곳이면 어디서든 처리할 수 있으며 고객이 고른 지역(이 서비스는 도쿄)에는 저장하고 주로 처리한다고 적고 있습니다. 위의 싱가포르와 미국은 두 회사가 있는 나라를 적은 것입니다. 데이터베이스·로그인 요청은 Cloudflare 네트워크를 거치고, 실시간 변경 알림은 여러 지역에 흩어진 서버 중 하나가 처리합니다. 이 서버들과 기록(로그)이 있는 나라는 Supabase가 공개하지 않았습니다. 2025년 3월 국외 이전 영향 평가는 이전 국가로 미국과 싱가포르를 적었지만 거기 실린 하위 처리자 목록은 지금 목록과 다르고, 현재(2026년 6월 1일자) 하위 처리자 목록에는 나라가 적혀 있지 않습니다. 서버 함수는 요청한 이용자와 가장 가까운 지역에서 실행되어 이용자 위치에 따라 나라가 달라집니다.</span></td></tr>
   <tr><th>이전 항목</th><td><a href="#s2">2장</a>의 계정 정보와 서비스 이용 중 생성되는 정보 전부, 접속 기록(로그인하지 않은 방문자의 IP 주소 포함)</td></tr>
   <tr><th>이전 시기와 방법</th><td>사이트에 접속해 자료를 불러오거나 로그인·저장할 때마다 인터넷으로 암호화(HTTPS)해 전송</td></tr>
   <tr><th>이용 목적</th><td><a href="#s6">6장</a>의 위탁 업무</td></tr>
-  <tr><th>보유·이용 기간</th><td><a href="#s3">3장</a>의 보유 기간과 같음</td></tr>
+  <tr><th>보유·이용 기간</th><td><a href="#s3">3장</a>의 보유 기간과 같음(Supabase 내부 백업에 남을 수 있는 사본은 <a href="#s4">4장</a> ‘파기 방법’ 참고)</td></tr>
 </tbody></table></div>
 
 <h3 id="s7-2">7-2. Vercel Inc.</h3>
 <div class="tbl"><table class="kv"><tbody>
   <tr><th>이전받는 자와 연락처</th><td>Vercel Inc. · privacy@vercel.com</td></tr>
-  <tr><th>이전 국가</th><td>미국 <mark class="todo">【확인 필요: 접속 기록이 저장되는 국가】</mark><br><span class="muted small">사이트 파일은 가까운 서버에서 제공되며, 2026년 9월 한국에서 확인했을 때는 서울 서버가 응답했습니다.</span></td></tr>
-  <tr><th>이전 항목</th><td>IP 주소, IP 주소로 추정한 위치, 브라우저·기기 정보(User-Agent), 요청한 주소, 접속 일시</td></tr>
+  <tr><th>이전 국가</th><td>미국(Vercel이 밝힌 주된 처리 시설 위치) <mark class="todo">【확인 필요: Vercel이 접속 기록을 저장하는 나라를 공개하지 않아 이전 국가를 모두 적을 수 없음. privacy@vercel.com에 문의할 것】</mark><br><span class="muted small">Vercel은 Vercel과 하위 처리자가 처리 시설을 둔 곳이면 어디서든 데이터를 처리할 수 있다고 밝히고 있으며, 2026년 8월 21일자 하위 처리자 목록에 적힌 나라는 미국·스페인·영국입니다. 접속 기록이 저장되는 나라는 따로 공개되어 있지 않습니다. 사이트 파일은 가까운 서버에서 제공되며, 2026년 9월 한국에서 확인했을 때는 서울 서버가 응답했습니다.</span></td></tr>
+  <tr><th>이전 항목</th><td>IP 주소, IP 주소로 추정한 위치(도시·국가), 접속한 통신망 번호(ASN), 브라우저·기기 정보(User-Agent 등 시스템 설정 정보), 암호화 연결의 특징으로 만든 식별값(JA4 TLS 지문), 요청한 주소(주소에 붙은 검색어 포함), 접속 일시</td></tr>
   <tr><th>이전 시기와 방법</th><td>사이트에 접속할 때마다 인터넷으로 암호화(HTTPS)해 전송</td></tr>
-  <tr><th>이용 목적</th><td>웹사이트 제공(호스팅)</td></tr>
+  <tr><th>이용 목적</th><td>웹사이트 제공(호스팅)과 보안(디도스 공격 방어 등)</td></tr>
   <tr><th>보유·이용 기간</th><td><a href="#s3">3장</a>의 ‘Vercel 접속 기록’ 참고</td></tr>
 </tbody></table></div>
 
