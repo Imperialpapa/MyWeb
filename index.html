@@ -594,6 +594,11 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
    SupabaseStore: 실제 서비스.  LocalStore: 설정이 비어 있을 때 미리보기.
    ================================================================ */
 const CFG=window.TOOLBOX_CONFIG||{};
+/* Supabase 키는 여기서 한 번만 고른다. createClient 와 시작의 ready 판정이 **같은 값**을 봐야 한다 —
+   판정만 옛 이름(SUPABASE_ANON_KEY)을 보면 그 줄을 지우는 순간 사이트가 오류 없이 미리보기 모드로 떨어진다.
+   keepalive.yml 도 같은 규칙(PUBLISHABLE || ANON)으로 고른다. 실패했다고 도중에 다른 키로 바꾸지 않는다 —
+   한 클라이언트에 두 키가 섞이면 401 이고, 클라이언트를 하나 더 만들면 로그인 저장소를 둘이 나눠 쓴다 */
+const SB_KEY=CFG.SUPABASE_PUBLISHABLE_KEY||CFG.SUPABASE_ANON_KEY||'';
 let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
 let COL_ERR='';       // 모음 조회 실패 메시지. 모음 링크가 기다리는 동안 이유를 보여 준다 (render 참고)
 const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
@@ -662,7 +667,7 @@ function LocalStore(){
 }
 
 function SupabaseStore(){
-  const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY);
+  const sb=supabase.createClient(CFG.SUPABASE_URL,SB_KEY);
   // readItems·readCols: 제대로 읽어 반영한 횟수. 0 이면 아직 한 번도 못 읽은 것이다 —
   // 그때의 빈 목록을 "없는 자료" 로 읽으면 멀쩡한 링크를 오진한다 (followLink 참고)
   // colsAt: 반영한 모음 조회를 **쏜** 시각. 그 뒤에 만든 모음은 그 조회에 없다
@@ -684,7 +689,8 @@ function SupabaseStore(){
      "둘 중 무엇이 먼저인가" 를 묻는 데 쓰면 안 된다. */
   const now=()=>performance.now();
   let liveAt=0,        // 채널이 마지막으로 살아난 시각 (0 이면 지금 끊긴 것으로 본다)
-      everLive=false,  // 한 번이라도 붙은 적이 있는가
+      lost=false,      // 끊긴 뒤 아직 못 메웠는가. 다음 SUBSCRIBED 에서 메운다.
+                       // 첫 연결 전에 실패한 것도 센다 — 다시 짓기로 첫 연결이 1분 넘게 늦으면 첫 조회 뒤의 변경을 놓친다
       inflight=null, inflightAt=0, queued=null,
       fillAt=0, fillTimer=0;
   /* 테이블마다 "몇 번째로 쏜 조회인가" 와 "몇 번째를 화면에 반영했는가".
@@ -729,22 +735,73 @@ function SupabaseStore(){
   }
   // 실시간: 바뀐 테이블만 다시 읽기 (지연 합치기)
   const timers={}; const bump=t=>{ clearTimeout(timers[t]); timers[t]=setTimeout(()=>{ load(t).catch(()=>{}); },250); };
-  sb.channel('toolbox')
-    .on('postgres_changes',{event:'*',schema:'public',table:'items'},()=>bump('items'))
-    .on('postgres_changes',{event:'*',schema:'public',table:'collections'},()=>bump('collections'))
-    .on('postgres_changes',{event:'*',schema:'public',table:'reports'},()=>bump('reports'))
-    .on('postgres_changes',{event:'*',schema:'public',table:'settings'},()=>bump('settings'))
-    .subscribe(status=>{
-      // SUBSCRIBED 가 아닌 상태는 전부 끊긴 것으로 본다. 예전에는 CHANNEL_ERROR·TIMED_OUT 만 봐서
-      // 소켓이 조용히 닫히는 CLOSED 일 때 알약이 초록으로 남았다 — 끊긴 줄 모르는 것이 가장 나쁘다.
-      if(status!=='SUBSCRIBED'){ liveAt=0; setConn('err'); return; }
-      const wasDown=everLive&&!liveAt;
-      everLive=true; liveAt=now(); setConn('db');
-      /* 끊겼다 돌아왔으면 그 사이 놓친 변경을 여기서 메운다.
-         `postgres_changes` 는 다시 붙어도 **끊겨 있던 동안의 변경을 돌려주지 않는다.**
-         탭을 켜 둔 채로 끊긴 경우, 이것이 없으면 아무도 다시 받지 않아 목록이 무한히 낡는다. */
-      if(wasDown) fillAfterReconnect();
-    });
+  /* 채널 다시 짓기. realtime-js 2.11.2 는 서버가 닫은 채널(CLOSED)을 소켓 목록에서 **빼 버리고 다시 붙지 않는다.**
+     익명 방문자의 publishable 키 연결은 24시간이면 서버가 닫고, 로그아웃 뒤 남은 사용자 JWT 가 만료돼도 닫힌다.
+     예전에는 그때 알약만 빨개지고, 새로 고칠 때까지 목록이 영영 낡았다.
+     - CLOSED: 5초 기다렸다 다시 짓는다. 또 닫히면 두 배씩 60초까지 늘린다
+     - CHANNEL_ERROR·TIMED_OUT: 라이브러리가 먼저 다시 붙는다. 60초 안에 SUBSCRIBED 가 안 오면 다시 짓는다
+       (서버가 참여를 거절하면 라이브러리는 다시 시도하지 않고 멈춰 있다)
+     - 기다림은 SUBSCRIBED 로 1분 넘게 버틴 뒤에 끊겨야 5초로 돌린다. 붙자마자 닫히기를 되풀이하면 5초마다 짓게 된다
+     - 세대 번호로 옛 채널의 소식을 버린다. removeChannel 이 옛 채널에 CLOSED 를 한 번 더 쏜다 —
+       안 거르면 "닫힘 → 다시 짓기 → 닫힘" 이 끝없이 돈다
+     - 숨은 탭에서도 짓는다. 라이브러리의 재연결도 숨은 탭에서 돌고, 다시 붙은 뒤의 메우기는
+       숨은 탭이면 건너뛰었다가 탭 복귀의 전체 조회가 맡는다 (fillAfterReconnect·visibilitychange). 폴링은 없다 */
+  let liveGen=0, liveCh=null, healT=0, healDue=0, healWait=5000, healing=false;
+  function connectLive(){
+    const g=++liveGen;
+    liveCh=sb.channel('toolbox')
+      .on('postgres_changes',{event:'*',schema:'public',table:'items'},()=>bump('items'))
+      .on('postgres_changes',{event:'*',schema:'public',table:'collections'},()=>bump('collections'))
+      .on('postgres_changes',{event:'*',schema:'public',table:'reports'},()=>bump('reports'))
+      .on('postgres_changes',{event:'*',schema:'public',table:'settings'},()=>bump('settings'))
+      .subscribe(status=>{
+        if(g!==liveGen) return;   // 갈아 끼운 옛 채널의 소식
+        // SUBSCRIBED 가 아닌 상태는 전부 끊긴 것으로 본다. 예전에는 CHANNEL_ERROR·TIMED_OUT 만 봐서
+        // 소켓이 조용히 닫히는 CLOSED 일 때 알약이 초록으로 남았다 — 끊긴 줄 모르는 것이 가장 나쁘다.
+        if(status!=='SUBSCRIBED'){
+          if(liveAt&&now()-liveAt>=60000) healWait=5000;
+          liveAt=0; lost=true; setConn('err');
+          healIn(status==='CLOSED'?healWait:60000);
+          return;
+        }
+        clearTimeout(healT); healT=0;
+        const wasDown=lost; lost=false;
+        liveAt=now(); setConn('db');
+        /* 끊겼다 돌아왔으면 그 사이 놓친 변경을 여기서 메운다. 다시 지은 채널도 같다.
+           `postgres_changes` 는 다시 붙어도 **끊겨 있던 동안의 변경을 돌려주지 않는다.**
+           탭을 켜 둔 채로 끊긴 경우, 이것이 없으면 아무도 다시 받지 않아 목록이 무한히 낡는다. */
+        if(wasDown) fillAfterReconnect();
+      });
+  }
+  // 더 이른 예약이 있으면 그대로 둔다. 되풀이되는 CHANNEL_ERROR 가 60초를 자꾸 뒤로 밀면 영영 안 짓는다
+  function healIn(ms){
+    const due=now()+ms; if(healT&&healDue<=due) return;
+    clearTimeout(healT); healDue=due; healT=setTimeout(heal,ms);
+  }
+  async function heal(){
+    healT=0;
+    if(healing) return; healing=true;
+    const old=liveCh; liveGen++; liveCh=null; liveAt=0; lost=true;   // 세대부터 올린다 (아래 removeChannel 의 CLOSED 를 버리게)
+    healWait=Math.min(healWait*2,60000);
+    try{
+      // 채널이 없어지면 소켓도 끊긴다. 같은 소켓에 다시 붙으면 게이트웨이가 준 만료된 토큰을 그대로 쓴다.
+      // 끊지 못하고 남은 채널이 있어도 새 소켓으로 붙게 한 번 더 끊는다
+      if(old) await sb.removeChannel(old);
+      sb.realtime.disconnect();
+      // 끊긴 동안 쌓인 옛 채널의 참여·떠나기를 버린다. realtime-js 2.11.2 의 disconnect 는 이 버퍼를 안 비워,
+      // 오래 끊겨 있으면 다시 짓기마다 한 쌍씩 쌓였다가 다시 붙는 순간 한꺼번에 나간다 (프로젝트 참여 한도를 함께 쓴다).
+      // 새 채널 것은 여기 없다 — 하트비트·라이브러리 재참여는 붙어 있을 때만 보내고, 새 참여는 아래 connectLive 가 넣는다
+      sb.realtime.sendBuffer=[];
+      // realtime-js 는 로그아웃 뒤에도 마지막 사용자 JWT 를 쥐고 있다. 그걸로 붙으면 만료로 다시 닫힌다.
+      // 세션 조회가 잠금에 걸려 10초 안에 안 오면 토큰은 두고 붙는다 (다음 다시 짓기에서 또 본다)
+      const r=await Promise.race([sb.auth.getSession(),new Promise(ok=>setTimeout(ok,10000))]);
+      const t=r&&r.data&&r.data.session&&r.data.session.access_token;
+      if(r) await sb.realtime.setAuth(t||SB_KEY).catch(()=>sb.realtime.setAuth(SB_KEY));   // 만료된 토큰은 setAuth 가 거절한다
+    }catch(e){ console.warn('실시간 채널을 다시 짓는 중 오류',e); }
+    healing=false;
+    connectLive();
+  }
+  connectLive();
   /* 재연결 메우기. **진행 중인 조회에 합치면 안 된다** — 그 조회의 쿼리는 끊겨 있던 동안 나갔으므로
      결과가 재연결 전 스냅샷이다. 회복 장치가 가장 필요한 순간에만 작동하지 않게 된다.
      지켜야 할 것은 하나다: 재연결한 시각 뒤에 **새로 쏜** 조회가 반드시 한 번 있어야 한다. */
@@ -790,16 +847,31 @@ function SupabaseStore(){
      운영자 권한이 생겨도 검토함이 "신고 없음" 으로 남고(reports 는 RLS 가 좁혀 준 목록이라 저절로 안 넓어진다),
      권한이 없어져도 남의 신고가 화면에 남고, votes 는 실시간 발행 목록에 없어 추천 표시가 영영 낡는다.
      아끼는 것은 탭 복귀 8건 중 2건뿐이다. 요청을 줄이는 몫은 위의 연속성 판정이 이미 다 했다(8→3). */
-  /* 첫 인증 이벤트(INITIAL_SESSION, 로그인 콜백이면 SIGNED_IN 이 먼저 올 수 있다)는 auth-js 가
-     주소의 토큰·오류를 다 읽은 뒤에 온다. 주소를 고쳐 쓰는 쪽은 이것을 기다린다 (afterAuth). */
-  let authSeen=false; const authWait=[];
-  sb.auth.onAuthStateChange((_ev,session)=>{ if(!authSeen){ authSeen=true; authWait.splice(0).forEach(f=>f()); } applySession(session); });
+  /* 주소를 고쳐 쓰는 쪽은 **이 탭의 INITIAL_SESSION** 을 기다린다 (afterAuth). 아무 첫 이벤트나 믿으면 안 된다.
+     auth-js 2.68.0 은 INITIAL_SESSION 을 이 탭의 초기화(주소 읽기)가 끝난 뒤 이 탭의 구독자에게만 준다.
+     반면 다른 탭이 BroadcastChannel 로 보낸 SIGNED_IN·TOKEN_REFRESHED 는 초기화를 기다리지 않고 바로 온다.
+     잠금(navigator.locks)은 탭끼리 나눠 쓰므로, 다른 탭이 토큰을 갱신하는 동안 이 탭은 주소를 아직 못 읽었다.
+     그때 주소를 걷으면 #access_token 이 사라져 로그인이 오류 없이 실패한다.
+     signedIn: 그 시점에 세션이 있는가 (시작의 토큰 걷기가 로그인 실패를 알리는 데 쓴다)
+     retry: 주소 읽기가 **새로 고치면 끝날 수도 있는** 이유로 실패했는가 — 서버에 못 닿았거나(연결·502~504,
+     HTML 오류 페이지라 JSON 이 아닌 응답) 서버 쪽 문제(5xx·429)다. auth-js 는 이때도 세션을 지우고 해시는 남긴다.
+     토큰은 아직 살아 있다. 서버가 4xx 로 거절한 토큰·잘못된 주소는 다시 읽어도 안 되므로 여기에 안 든다 */
+  let authInit=false, authSeen=false, authUser=false, authRetry=false; const authWait=[];
+  const mayRetry=e=>!!e&&(e.name==='AuthRetryableFetchError'||e.name==='AuthUnknownError'||e.name==='AuthApiError'&&(e.status>=500||e.status===429));
+  sb.auth.onAuthStateChange((ev,session)=>{
+    if(ev==='INITIAL_SESSION'&&!authInit){ authInit=true; const u=!!session;
+      // initialize() 는 이미 끝난 초기화의 결과({error})를 그대로 돌려준다 (잠금을 다시 잡지 않는다)
+      sb.auth.initialize().then(r=>mayRetry(r&&r.error),()=>false)
+        .then(retry=>{ authSeen=true; authUser=u; authRetry=retry; authWait.splice(0).forEach(f=>f(authUser,authRetry)); });
+    }
+    applySession(session);
+  });
   return {
     kind:'db',
     subscribe(cb){ subs.push(cb); emit(); loadAll(); },
     reloadCols(){ return load('collections'); },   // 모음 링크의 "다시 불러오기"
     onAuth(cb){ authCb=cb; cb(me); },
-    afterAuth(cb){ authSeen?cb():authWait.push(cb); },
+    afterAuth(cb){ authSeen?cb(authUser,authRetry):authWait.push(cb); },
     // 돌아올 주소에는 우리 키만 붙인다(보던 자료로 돌아오게). 해시는 절대 안 된다 — 서버가 토큰을
     // 문자열로 '#' 뒤에 이어 붙여 '#…#access_token' 이 되고, auth-js 가 못 읽어 로그인이 조용히 실패한다.
     async login(email){
@@ -2283,12 +2355,25 @@ function writeUrl(){
     // auth-js 는 토큰 확인이 실패하면 해시를 안 지우고, 로그인 뒤 뒤로 가기를 누르면 토큰이 든 기록으로 돌아온다.
     // 거기에 검색어·분야를 붙여 쓰면 공유용처럼 보이는 주소가 되어, 주소창을 복사해 보내는 순간
     // 받은 사람이 **보낸 사람으로 로그인된다.** 그런 주소는 공유용으로 꾸미지 않는다
-    const h=new URLSearchParams(location.hash.slice(1));
-    if(h.has('access_token')||h.has('refresh_token')||h.has('provider_token')) return;
+    // 걷기(dropTokens)는 이 탭의 INITIAL_SESSION 뒤에야 켜진다. 그 전(5초 대기로 열린 경우)을 여기서 막는다
+    if(tokenHash()) return;
     const next=location.pathname+linkQuery()+location.hash;
     if(next!==location.pathname+location.search+location.hash) history.replaceState(history.state,'',next);
   }catch(e){ console.warn('주소를 반영하지 못했습니다',e); }   // 곁가지다. 여기서 던지면 부른 쪽이 멈춘다
 }
+function tokenHash(){ const h=new URLSearchParams(location.hash.slice(1)); return h.has('access_token')||h.has('refresh_token')||h.has('provider_token'); }
+/* 주소의 로그인 토큰 걷기. auth-js 는 토큰을 읽은 뒤 `location.hash=''` 로 지우는데, 이것이 기록을 하나 더 쌓아
+   로그인 직후 **뒤로 가기**를 누르면 토큰이 든 주소로 돌아온다(hashchange). 그 주소를 복사해 보내면 받은 사람이 보낸 사람으로 로그인된다.
+   - **이 탭의 INITIAL_SESSION 뒤에만** 켠다 (tokensOff, 시작 참고). 주소를 읽기 전에 걷으면 로그인이 오류 없이 실패한다
+   - auth-js 2.68.0 은 주소를 초기화 때 한 번만 읽는다. 그 뒤로는 해시를 걷어도 로그인에 아무 영향이 없다
+   - 로그인 오류(#error)는 시작할 때 따로 읽어 안내하고 지운다. 그쪽이 늘 먼저 돈다 (이것은 인증 이벤트 뒤에야 켜진다)
+   - 걷은 뒤 쿼리는 지금 화면에 맞춰 다시 쓴다. 토큰이 든 기록의 쿼리는 로그인하던 때의 것이다 */
+let tokensOff=false;
+function dropTokens(){
+  try{ if(tokensOff&&tokenHash()){ history.replaceState(history.state,'',location.pathname+location.search); urlSoon(); } }
+  catch(e){ console.warn('주소의 로그인 토큰을 지우지 못했습니다',e); }
+}
+addEventListener('hashchange',dropTokens);
 /* 링크가 가리키는 자료·모음을 푼다. store 가 자료를 줄 때마다, 그리기 전에 부른다.
    **한 번이라도 제대로 읽은 뒤에만** 판단한다. 읽기 전의 빈 목록이나 실패한 조회를 "없음" 으로 읽으면
    멀쩡한 링크를 삭제된 자료로 오진한다. 실패했으면 다음 조회까지 기다린다.
@@ -2388,7 +2473,7 @@ if(LINK.c) S.col=LINK.c;
 LINK.key=linkKey();   // 여기서부터 달라지면 사용자가 움직인 것이다 (linkMoved)
 render();
 (function(){
-  const ready=CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase;
+  const ready=CFG.SUPABASE_URL&&SB_KEY&&window.supabase;   // 키는 SB_KEY 하나만 본다 (위 설명)
   store=ready?SupabaseStore():LocalStore();
   if(!ready){ setConn('local'); $('#notice').innerHTML=`<div class="notice"><b>미리보기 모드</b>입니다. <code>config.js</code>에 Supabase 주소와 키를 넣으면 실제 공유 사이트로 동작합니다. 지금은 이 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다.</div>`; }
   store.onAuth(me=>{
@@ -2417,10 +2502,24 @@ render();
     openLogin(why);
     if(code==='otp_expired') $('#lfHave').click();
   }
-  // 주소 쓰기는 여기서 연다 — 위의 오류 안내가 해시를 읽은 뒤이고, 실제로 열리는 것은 첫 인증 이벤트 뒤다.
+  // 주소 쓰기는 여기서 연다 — 위의 오류 안내가 해시를 읽은 뒤이고, 실제로 열리는 것은 이 탭의 INITIAL_SESSION 뒤다.
   // 인증이 끝내 안 오면(저장소 막힘 등) 5초 뒤에 연다. 그때도 해시는 그대로 두므로 토큰을 지우지 않는다.
   const openUrl=()=>{ if(!urlOn){ urlOn=true; urlSoon(); } };
-  store.afterAuth(openUrl); setTimeout(openUrl,5000);
+  store.afterAuth((signedIn,retry)=>{
+    // 토큰 걷기는 여기서만 켠다. 5초 대기로는 안 켠다 (주소를 읽기 전일 수 있다). 미리보기는 주소를 읽는 인증이 없어
+    // 토큰이 곧 로그인할 유일한 사본이다 (supabase-js 를 못 불러온 경우). 그대로 둔다
+    if(linkOn()){
+      // auth-js 는 토큰 확인에 성공하면 해시를 지운다. 여기까지 남았으면 그 토큰으로는 로그인하지 못한 것이다.
+      // 말없이 걷기만 하면 로그인이 왜 안 됐는지 알 길이 없다
+      // 연결·서버 문제로 못 끝냈으면(retry) 토큰은 **남긴다.** 메일 링크는 한 번만 쓰여 이 주소가 그 로그인의 유일한 사본이고,
+      // 걷으면 새로 고쳐도 소용없이 메일을 다시 받아야 한다(시간당 발송 한도가 작다). 공유용으로 꾸미지 않는 것은 writeUrl 이 막는다
+      const tok=!signedIn&&new URLSearchParams(location.hash.slice(1)).has('access_token'), keep=tok&&retry;
+      if(tok) openLogin(keep?'연결 문제로 로그인을 마치지 못했습니다. 연결을 확인한 뒤 새로 고침해 주세요. 계속 안 되면 다시 로그인해 주세요.':'로그인을 마치지 못했습니다. 다시 로그인해 주세요.');
+      tokensOff=true; if(!keep) dropTokens();
+    }
+    openUrl();
+  });
+  setTimeout(openUrl,5000);
 })();
 </script>
 </body>
