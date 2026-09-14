@@ -83,7 +83,12 @@ begin
   get diagnostics v_n = row_count;
   insert into delete_user_result values ('신고자 이름 가림', v_n);
 
-  -- (4) 마지막에 계정. profiles·추천(votes, 추천 수도 함께 줄어든다)·AI 사용량(ai_usage)은 cascade 로 지워지고,
+  -- (4) 인증 감사 기록. 로그인·로그아웃마다 이메일과 IP 가 담긴 행이 쌓이는데, 계정과 외래키가 없어 계정을 지워도 남는다
+  delete from auth.audit_log_entries where payload->>'actor_id' = v_uid::text;
+  get diagnostics v_n = row_count;
+  insert into delete_user_result values ('인증 감사 기록 삭제', v_n);
+
+  -- (5) 마지막에 계정. profiles·추천(votes, 추천 수도 함께 줄어든다)·AI 사용량(ai_usage)은 cascade 로 지워지고,
   --     남긴 자료·모음·신고의 owner_id·reporter_id 는 null 이 된다
   select count(*) into v_n from public.votes where user_id = v_uid;
   insert into delete_user_result values ('추천 기록 삭제', v_n);

@@ -751,6 +751,28 @@ begin
   end loop;
 end $$;
 
+-- ---------- 매일 정리 (pg_cron) ----------
+-- 개인정보 처리방침에 "지난 기록은 지운다" 고 쓰려면 실제로 지워야 한다. 작업 없이 문장만 있으면 처리방침이 거짓이 된다.
+--   (1) ai_usage: 목적이 "하루 사용 한도" 하나뿐이라 날이 지나면 보관할 근거가 없다.
+--       어제 것까지는 남긴다 — 자정을 넘긴 요청이 실패하면 환불(ai_refund_quota)이 날짜를 넘겨 들어올 수 있다.
+--   (2) 한 번도 로그인하지 않은 계정: 이메일 코드를 요청하는 순간(코드를 확인하기 전에) 계정 행이 생긴다. 남의 주소를 적었을 수도 있다.
+--       코드는 1시간 유효하므로 1일이 지나도 로그인한 적이 없으면 지운다.
+--       로그인 없이는 글·추천·신고를 못 해서 딸린 것이 있을 수 없지만, 무엇이든 딸려 있으면 손대지 않는다.
+-- 같은 이름으로 다시 등록하면 덮어쓴다(재실행 안전). pg_cron 시각은 UTC — 19:07 은 한국 시간 새벽 4시 7분.
+-- 확인: select jobname, schedule, active from cron.job;   실행 기록: select * from cron.job_run_details order by start_time desc limit 5;
+create extension if not exists pg_cron;
+select cron.schedule('daily-privacy-cleanup', '7 19 * * *', $job$
+  delete from public.ai_usage where day < current_date - 1;
+  delete from auth.users u
+   where u.last_sign_in_at is null
+     and u.created_at < now() - interval '1 day'
+     and not exists (select 1 from public.items       where owner_id    = u.id)
+     and not exists (select 1 from public.collections where owner_id    = u.id)
+     and not exists (select 1 from public.reports     where reporter_id = u.id)
+     and not exists (select 1 from public.votes       where user_id     = u.id)
+     and not exists (select 1 from public.profiles p  where p.id = u.id and (p.is_admin or p.name <> ''));
+$job$);
+
 -- ============================================================
 -- 운영자 지정: 본인이 사이트에 한 번 로그인한 뒤, 아래 한 줄을
 -- 이메일만 바꿔 실행하세요.
