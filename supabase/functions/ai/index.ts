@@ -13,9 +13,18 @@
 //
 // 배포:  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 //        npx supabase functions deploy ai
+// Supabase 키 되돌리기 (재배포 없이 먹는다. 키는 요청마다 다시 읽는다):
+//        npx supabase secrets set KEY_SOURCE=anon     ← 옛 anon 키로 강제
+//        npx supabase secrets unset KEY_SOURCE        ← publishable 키 우선으로 복귀
+//   옛 키가 켜져 있고 publishable 경로만 문제일 때만 쓴다. 옛 키를 끈 뒤(todo 7단계)에는 anon 키도 거절돼,
+//   이 스위치를 켜면 로그인한 사람 전원이 503 을 받고 Auth 가 살아나도 풀리지 않는다 (Auth 장애 때 누르지 말 것).
+//   리허설 뒤 반드시 unset 하고, 옛 키를 끄기 전에 `npx supabase secrets list` 에 KEY_SOURCE 가 없는지 볼 것.
+//   남겨 두면 옛 키를 끄는 순간 전원 503 이 나서 새 키가 문제인 것처럼 보인다. 로그의 keySource 가 anon 이면 이 스위치다.
 // ============================================================
 import Anthropic from "npm:@anthropic-ai/sdk@0.71.0";
-import { createClient } from "npm:@supabase/supabase-js@2";
+// 정확한 버전으로 고정한다. "@2" 로 두면 재배포할 때마다 그날의 최신판이 묶여 들어가,
+// 키를 바꾸는 도중 라이브러리 변화까지 섞여 무엇이 깨뜨렸는지 가를 수 없다.
+import { createClient } from "npm:@supabase/supabase-js@2.116.0";
 
 const MODEL = "claude-opus-5";
 const MAX_ORGANIZE = 30;      // 한 번에 다시 분류할 항목 수 (브라우저가 이 크기로 나눠 부른다)
@@ -241,7 +250,7 @@ async function ask(
   user: string,
   schema: Record<string, unknown>,
   opts: { max_tokens: number; effort: "low" | "medium" | "high"; label: string; timeout_ms: number },
-  call: { ok: boolean },
+  call: { ok: boolean; keySource: string },
 ) {
   // 사용자 잘못이 아닌 실패. 던지면 부르는 쪽이 하루 사용량을 돌려준다.
   const ours = (m: string) => Object.assign(new Error(m), { ours: true });
@@ -289,9 +298,11 @@ async function ask(
 
   // 얼마를 썼는지 남긴다. 대시보드 Edge Functions → ai → Logs 에서 볼 수 있다.
   // 이게 없으면 어느 작업이 비싼지 청구서 총액 말고는 알 방법이 없다.
+  // keySource 는 Supabase 키를 어디서 골랐는지(publishable/anon)만 싣는다. 키 교체·되돌리기가 실제로 먹었는지 여기서 본다.
   console.log(JSON.stringify({
     ai: opts.label, model: MODEL, effort: opts.effort,
     in: tokIn, cached: tokCache, out: tokOut, ms: Date.now() - t0, stop: stop || "none",
+    keySource: call.keySource,
   }));
 
   // 끊긴 스트림을 성공으로 오해하면, 반쪽짜리 JSON 을 두고 엉뚱한 오류를 낸다
@@ -317,6 +328,126 @@ const classifyProps = (idMode: boolean, catIds: string[], catNames: string[]) =>
 );
 const classifyKey = (idMode: boolean) => (idMode ? "category_id" : "category");
 
+// ---------- 호출한 사용자 확인 ----------
+// verify_jwt=false 라 이 함수가 유일한 문이다 (config.toml 참고). 순서: 키 고르기 → 토큰 모양 거르기 → Auth 에 묻기.
+
+// Supabase 키 고르기. 새 publishable 키가 먼저, 옛 anon 키(JWT)는 없을 때만 쓴다.
+// 순서를 뒤집으면 안 된다. 옛 키를 대시보드에서 꺼도 SUPABASE_ANON_KEY 변수는 그대로 남고 값만 거절당해서,
+// "anon 이 비었나" 만 보는 대비책은 꺼진 것을 알아채지 못한다.
+// 요청마다 읽는다. 모듈 맨 위에서 한 번만 읽어 두면 떠 있는 인스턴스가 옛 값을 쥐고 있어,
+// KEY_SOURCE 를 바꿔도 되돌리기가 안 먹는 것처럼 보일 수 있다 (문서가 다시 읽는다고 보장하지 않는다).
+const SERVER_KEY_MSG = "서버에 Supabase 키가 설정되지 않았습니다. 운영자에게 알려 주세요";
+type KeySource = "publishable" | "anon";
+type KeyPick = { key: string; source: KeySource } | { why: string; msg: string };
+function pickSupabaseKey(): KeyPick {
+  const anon = (Deno.env.get("SUPABASE_ANON_KEY") || "").trim();
+  // 되돌리기 스위치. SUPABASE_ 로 시작하는 이름은 CLI 가 "skipping" 한 줄만 찍고 저장하지 않아 쓸 수 없다.
+  const sw = (Deno.env.get("KEY_SOURCE") || "").trim().toLowerCase();
+  if (sw === "anon") {
+    return anon ? { key: anon, source: "anon" } : { why: "KEY_SOURCE=anon but SUPABASE_ANON_KEY is empty", msg: SERVER_KEY_MSG };
+  }
+  // 오타를 조용히 넘기면 되돌렸다고 믿는 동안 계속 새 키로 돈다. 값은 어디에도 싣지 않는다 (키를 잘못 붙여 넣었을 수 있다).
+  if (sw) {
+    return { why: "KEY_SOURCE is set but not 'anon'", msg: "서버의 KEY_SOURCE 설정이 잘못됐습니다 (anon 이거나 비어 있어야 합니다). 운영자에게 알려 주세요" };
+  }
+  const isPub = (v: unknown): v is string => typeof v === "string" && v.startsWith("sb_publishable_");
+  let pub = "";
+  try {
+    // {"default":"sb_publishable_..."} 모양이어야 하지만 이름이 다르거나, 비었거나, 깨졌을 수 있다. 어느 경우도 던지지 않는다.
+    const m: unknown = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+    if (m && typeof m === "object") {
+      const d = (m as Record<string, unknown>).default;
+      pub = isPub(d) ? d : (Object.values(m).find(isPub) ?? "");
+    }
+  } catch { /* 깨진 JSON: 아래 대비책으로 넘어간다 */ }
+  if (!pub) {
+    const one = (Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || "").trim();   // 로컬 CLI 는 한 개짜리 이름으로 준다
+    if (isPub(one)) pub = one;
+  }
+  if (pub) return { key: pub.trim(), source: "publishable" };
+  if (anon) return { key: anon, source: "anon" };
+  return { why: "no publishable or anon key in env", msg: SERVER_KEY_MSG };
+}
+
+// "Bearer <토큰>" 에서 토큰만 꺼낸다. Auth 서버처럼 bearer 의 대소문자는 가리지 않는다.
+function bearerToken(req: Request): string {
+  const m = /^bearer\s+(\S+)$/i.exec(req.headers.get("Authorization") || "");
+  return m ? m[1] : "";
+}
+
+// 로그인 토큰일 수 없는 것을 네트워크 없이 먼저 돌려보낸다. 서명을 보지 않으므로 **거절에만** 쓰고, 통과는 Auth 가 정한다.
+// 로그아웃한 브라우저(supabase-js 2.49.1)는 키 자체(anon JWT 나 sb_publishable_)를 Bearer 로 보낸다.
+// 이걸 Auth 에 물으면 옛 키가 꺼진 뒤 게이트웨이 오류가 돌아와, 로그인 안 한 방문자가 "서버 문제" 로 잘못 분류된다.
+// 또 verify_jwt=false 라 이런 요청도 호출 횟수로 잡히니, Auth 호출·본문 읽기 전에 끝내야 싸다.
+function looksLikeUserJwt(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts.every((p) => /^[A-Za-z0-9_-]+$/.test(p))) return false;
+  try {
+    // atob 은 UTF-8 을 풀지 않지만 괜찮다. 한글 바이트는 모두 0x80 이상이라 JSON 구조를 깨지 않고, sub 는 ASCII 다.
+    const claims = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return !!claims && typeof claims.sub === "string" && claims.sub !== "";
+  } catch { return false; }
+}
+
+// 요청 하나 쓰고 버리는 클라이언트. 사용자 토큰을 Authorization 에 실어, 아래 조회·rpc 전부에 RLS 가 이 사용자로 걸린다.
+// 서버에는 저장할 세션이 없다. 저장소를 켜 두면 같은 인스턴스에 들어온 다른 사람의 요청과 섞일 여지만 생긴다.
+// authRes.status 는 /auth/v1/user 가 실제로 돌려준 HTTP 코드다. auth-js 는 본문이 JSON 이 아니면(앞단 방화벽·CDN 의
+// HTML 차단·한도 페이지) 오류에 status 를 싣지 않아, 이걸 따로 적어 두지 않으면 로그가 status 0 이 된다.
+function userClient(key: string, token: string) {
+  const authRes = { status: 0 };
+  const watchFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const res = await fetch(input, init);
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("/auth/v1/user")) authRes.status = res.status;
+    return res;
+  };
+  const sb = createClient(Deno.env.get("SUPABASE_URL") || "", key, {
+    // global.fetch 는 supabase-js 2.116.0 이 auth 에도 그대로 넘긴다(조회·rpc 는 같은 fetch 를 감싸 쓴다). 버전을 올리면 다시 볼 것.
+    global: { headers: { Authorization: `Bearer ${token}` }, fetch: watchFetch },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return { sb, authRes };
+}
+
+// getUser 가 사용자를 돌려주지 않았을 때 누구 탓인지 가른다.
+//   사용자 탓(다시 로그인하면 풀린다)   → 401 "로그인이 필요합니다"
+//   서버 탓(키 거절·Auth 장애·연결 실패) → 503, 운영자에게 알리라고 한다
+// 둘을 뭉치면 옛 키가 꺼진 날 로그인한 사람 전원이 "로그인이 필요합니다" 만 보고, 원인은 어디에도 안 남는다.
+// Auth 가 코드를 붙인 거절만 사용자 탓으로 본다. 게이트웨이의 키 거절("Invalid API key", "Legacy API keys are disabled")은
+// 코드 없는 401 로 온다. 이 문구는 문서로 약속된 것이 아니므로 판정과 상관없이 전부 로그로 남긴다.
+// session_not_found 는 auth-js 가 코드 없는 400(AuthSessionMissingError)으로 바꿔 던진다 — 아래 400 규칙이 받는다.
+const USER_TOKEN_CODES = new Set(["bad_jwt", "session_not_found", "user_not_found", "no_authorization", "user_banned"]);
+// httpStatus: userClient 가 적어 둔 실제 응답 코드. auth-js 오류에 status 가 없을 때(본문이 JSON 이 아닐 때)만 채운다.
+function classifyAuthError(e: unknown, httpStatus = 0) {
+  const x = (e && typeof e === "object" ? e : {}) as { status?: unknown; code?: unknown; message?: unknown; name?: unknown };
+  const errStatus = typeof x.status === "number" ? x.status : 0;
+  // 채우지 않으면 HTML 차단(403)·한도(429)·404 가 전부 status 0 으로 찍혀 가를 수 없고, 저절로 풀릴 429 에 "설정 문제" 가 나간다.
+  const status = errStatus || httpStatus;
+  const code = typeof x.code === "string" ? x.code : "";
+  const msg = e ? String(x.message ?? e) : "no user and no error";
+  // 사용자 탓은 Auth 가 읽을 수 있는 답(errStatus)을 줬을 때만 본다. HTML 403 은 토큰이 아니라 앞단이 막은 것이라,
+  // 채운 코드로 판정하면 다시 로그인해도 안 풀리는데 "로그인이 필요합니다" 가 나간다.
+  const userFault = USER_TOKEN_CODES.has(code) ||
+    ((errStatus === 400 || errStatus === 403) && !/api[ _-]?key|legacy/i.test(msg));
+  // 503 문구만 가른다. 연결 실패·5xx·429 는 기다리면 풀릴 수 있고, 나머지(코드 없는 401 등)는 설정을 고쳐야 풀린다.
+  const transient = !userFault && (x.name === "AuthRetryableFetchError" || status === 429 || status >= 500);
+  return { userFault, transient, status, code, msg };
+}
+
+// 로그인·권한 확인 실패는 전부 한 줄 JSON 으로 남긴다 (대시보드 Edge Functions → ai → Logs). stage 가 어디서 멈췄는지 알려 준다.
+// 토큰과 키 값은 절대 싣지 않는다. 키는 어디서 왔는지(keySource)만. 오류 문구에 섞여 들어온 것도 가린다.
+function logAuthFail(
+  kind: "user" | "server" | "config",
+  f: { stage: string; reply: number; keySource?: string; status?: number; code?: string; msg?: string },
+) {
+  const msg = String(f.msg || "")
+    .replace(/eyJ[\w-]*\.[\w-]*\.[\w-]*/g, "[jwt]").replace(/sb_[a-z]+_[\w-]+/gi, "[key]").slice(0, 200);
+  const line = JSON.stringify({
+    authFail: kind, stage: f.stage, reply: f.reply, keySource: f.keySource || "", status: f.status || 0, code: f.code || "", msg,
+  });
+  if (kind === "user") console.warn(line); else console.error(line);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return fail("POST 만 받습니다", 405);
@@ -324,14 +455,57 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) return fail("서버에 ANTHROPIC_API_KEY 가 설정되지 않았습니다 (README 7단계)", 500);
 
-  // 호출한 사용자 확인: 브라우저가 보낸 로그인 토큰으로 Supabase 에 물어본다
-  const auth = req.headers.get("Authorization") || "";
-  const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: auth } },
-  });
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return fail("로그인이 필요합니다", 401);
-  const { data: prof } = await sb.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
+  // 호출한 사용자 확인: 브라우저가 보낸 로그인 토큰을 Supabase Auth 에 물어본다 (verify_jwt=false 라 여기가 유일한 문)
+  const sbKey = pickSupabaseKey();
+  if ("why" in sbKey) {
+    logAuthFail("config", { stage: "key", reply: 500, msg: sbKey.why });
+    return fail(sbKey.msg, 500);
+  }
+  const token = bearerToken(req);
+  if (!looksLikeUserJwt(token)) {
+    logAuthFail("user", { stage: "prefilter", reply: 401, keySource: sbKey.source, msg: token ? "not a user jwt" : "no bearer token" });
+    return fail("로그인이 필요합니다", 401);
+  }
+  // 같은 클라이언트가 아래의 profiles·settings·items 조회와 rpc 에 그대로 쓰인다 (RLS 가 이 사용자로 걸린다)
+  let conn: ReturnType<typeof userClient>;
+  try {
+    conn = userClient(sbKey.key, token);
+  } catch (e) {
+    // createClient 는 주소·키가 비었거나 모양이 틀리면 던진다. 잡지 않으면 브라우저는 뜻 없는 500 만 본다.
+    logAuthFail("config", { stage: "client", reply: 500, keySource: sbKey.source, msg: String((e as Error)?.message || e) });
+    return fail(SERVER_KEY_MSG, 500);
+  }
+  const { sb, authRes } = conn;
+  let user: { id: string } | null = null;
+  let authErr: unknown = null;
+  try {
+    // 오류를 버리지 않는다. 버리면 키가 거절된 날에도 "로그인이 필요합니다" 만 나가고 아무 로그도 안 남는다.
+    const { data, error } = await sb.auth.getUser(token);
+    user = data.user;
+    authErr = error;
+  } catch (e) {
+    authErr = e;   // auth-js 는 AuthError 가 아닌 것은 돌려주지 않고 던진다
+  }
+  if (!user?.id) {
+    const f = classifyAuthError(authErr, authRes.status);
+    logAuthFail(f.userFault ? "user" : "server", {
+      stage: "getUser", reply: f.userFault ? 401 : 503, keySource: sbKey.source, status: f.status, code: f.code, msg: f.msg,
+    });
+    if (f.userFault) return fail("로그인이 필요합니다", 401);
+    // 404 만 아니면 브라우저는 이 문구를 그대로 보여 준다 (index.html 의 store.ai)
+    return fail(f.transient
+      ? "로그인 확인 서버가 응답하지 않습니다. 잠시 후 다시 시도하고, 계속되면 운영자에게 알려 주세요"
+      : "서버 설정 문제로 로그인을 확인하지 못했습니다. 다시 로그인해도 해결되지 않으니 운영자에게 알려 주세요", 503);
+  }
+  // 오류를 버리지 않는다. 버리면 읽기에 실패한 운영자가 isAdmin=false 로 떨어져 "운영자만 쓸 수 있습니다" 만 받고 로그는 없다.
+  // getUser 는 통과해도 PostgREST 만 실패할 수 있다 (DB 재시작 중 503, 재시도하지 않는 500·502·504, 401 PGRST301/303).
+  const { data: prof, error: profErr, status: profStatus } = await sb.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
+  if (profErr) {
+    logAuthFail("server", {
+      stage: "profile", reply: 503, keySource: sbKey.source, status: profStatus, code: String(profErr.code || ""), msg: profErr.message,
+    });
+    return fail("권한을 확인하지 못했습니다. 잠시 후 다시 시도하고, 계속되면 운영자에게 알려 주세요", 503);
+  }
   const isAdmin = !!(prof && prof.is_admin);
 
   let body: { action?: string; item?: Partial<Row>; ids?: string[]; tagsHint?: string[];
@@ -349,7 +523,8 @@ Deno.serve(async (req) => {
   if (cost === undefined) return fail("알 수 없는 action 입니다: " + action);
   if (action !== "suggest" && !isAdmin) return fail("운영자만 쓸 수 있습니다", 403);
   let charged = 0;
-  const call = { ok: false };   // ask() 가 응답을 끝까지 받으면 true
+  // ok: ask() 가 응답을 끝까지 받으면 true. keySource: ask() 가 사용량 로그 한 줄에 같이 남긴다
+  const call = { ok: false, keySource: sbKey.source as string };
   const takeQuota = async (): Promise<Response | null> => {
     const { data: ok, error } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user, cost });
     if (error) return fail("사용량을 확인하지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
