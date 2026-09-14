@@ -1,0 +1,113 @@
+# Supabase 무료 프로젝트가 멈추지 않게 하루 두 번 DB 에 가벼운 질의를 건다.
+# 무료 프로젝트는 7일 동안 활동이 적으면 멈춘다. 공식 문서 기준은 "하루 몇 번의 사용자 DB 요청" 이다.
+#
+# 비밀 값이 필요 없다. 주소와 키는 이미 공개된 config.js 에서 읽는다 (키를 바꾸면 따라온다).
+# 이 저장소는 공개라 로그도 공개다. 응답 본문은 찍지 않는다.
+name: keepalive
+
+on:
+  schedule:
+    # UTC 기준. 정각에는 GitHub 가 예약 실행을 늦추거나 버리므로 피한다. 한국 시간 12:17 과 00:47
+    - cron: '17 3 * * *'
+    - cron: '47 15 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    name: DB 에 질의
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: config.js
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: 표 두 개를 한 줄씩 읽는다
+        run: |
+          set -euo pipefail
+          # config.js 는 브라우저용이라 window 에 값을 단다. 흉내 낸 window 로 읽는다
+          cfg=$(node -e '
+            globalThis.window = {};
+            require("./config.js");
+            const c = window.TOOLBOX_CONFIG || {};
+            if (!c.SUPABASE_URL || !c.SUPABASE_ANON_KEY) {
+              console.error("config.js 에 SUPABASE_URL 또는 SUPABASE_ANON_KEY 가 비어 있습니다");
+              process.exit(1);
+            }
+            console.log(c.SUPABASE_URL.replace(/\/+$/, "") + " " + c.SUPABASE_ANON_KEY);
+          ')
+          read -r url key <<<"$cfg"
+
+          # /rest/v1/ 루트는 부르지 않는다. 2026-04 부터 anon·publishable 키로는 401 이다.
+          # 키는 apikey 머리에만 싣는다. 옛 anon JWT 와 새 sb_publishable_ 키 둘 다 이렇게 받는다
+          fail=0
+          for path in 'settings?select=key&limit=1' 'items?select=id&limit=1'; do
+            table=${path%%\?*}
+            # 연결 거부·TLS 실패 같은 순간 오류도 다시 시도한다(--retry 만으로는 시간 초과·5xx 만 다시 한다).
+            # 표 하나에 최대 약 80초. 둘을 합쳐도 timeout-minutes 안에 끝나야 실패 문구가 끝까지 찍힌다
+            code=$(curl -sS -o body.json -w '%{http_code}' \
+                     --max-time 20 --retry 2 --retry-delay 10 --retry-all-errors --retry-max-time 60 \
+                     -H "apikey: $key" -H 'Accept: application/json' \
+                     "$url/rest/v1/$path") || code="연결 실패"
+            if [ "$code" = 200 ] && node -e 'process.exit(Array.isArray(JSON.parse(require("fs").readFileSync("body.json","utf8"))) ? 0 : 1)' 2>/dev/null; then
+              echo "정상: $table"
+            else
+              echo "::error::$table 질의 실패 ($code). 프로젝트가 멈췄거나, 키가 폐기됐거나, 주소가 바뀌었을 수 있습니다. Supabase 대시보드를 확인하세요."
+              fail=1
+            fi
+          done
+          rm -f body.json
+          exit $fail
+
+  keep-schedule:
+    # 공개 저장소는 60일 동안 활동이 없으면 예약 실행이 꺼진다. 커밋이 뜸한 시기가 곧 프로젝트가
+    # 멈추기 쉬운 시기라, 이게 꺼지면 방지책이 가장 필요할 때 조용히 사라진다.
+    # 이미 켜진 workflow 에 "켜기" 를 부르면 타이머가 되돌아간다 (문서에는 없고, 실제 저장소들에서 확인한 동작).
+    name: 예약 실행이 꺼지지 않게
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: 예약 workflow 켜기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 목록에는 기본 브랜치에 없는 workflow 도 나온다. 남의 포크 PR 이 이상한 파일 이름(#, %)으로 등록해 둘 수 있으므로
+          # 경로가 아니라 숫자 id 로 부르고, 한 건이 실패해도 나머지를 계속 켠다.
+          # 대신 **이 workflow 자신**을 못 켰으면 빨갛게 끝낸다. 그걸 경고로만 두면 60일 타이머가 조용히 안 돌아간다
+          list=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.path | startswith(".github/workflows/")) | "\(.id) \(.state) \(.path)"')
+          self=${GITHUB_WORKFLOW_REF#*/*/}; self=${self%@refs/*}
+          self_ok=0
+          # 사람이 일부러 끈 것(disabled_manually)은 건드리지 않는다. 켜져 있는 것과 활동이 없어 꺼진 것만 켠다
+          while read -r id state path; do
+            [ -n "$id" ] || continue
+            case "$state" in
+              active|disabled_inactivity)
+                if gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/$id/enable" >/dev/null; then
+                  if [ "$state" = active ]; then echo "켜 둠: $path"
+                  else echo "::warning::$path 이 활동이 없어 꺼져 있었습니다. 다시 켰습니다."; fi
+                  if [ "$path" = "$self" ]; then self_ok=1; fi
+                else
+                  echo "::warning::$path 켜기에 실패했습니다"
+                fi ;;
+              *)
+                echo "그대로 둠: $path ($state)" ;;
+            esac
+          done <<<"$list"
+          if [ "$self_ok" != 1 ]; then
+            echo "::error::이 workflow($self)를 켜 두지 못했습니다. 이대로면 60일 뒤 예약 실행이 꺼질 수 있습니다."
+            exit 1
+          fi
