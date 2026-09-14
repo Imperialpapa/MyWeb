@@ -287,6 +287,7 @@ a{color:var(--link)}
 .crumb{color:var(--muted);font-size:12px;margin-bottom:6px}
 .notice{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--surface);padding:10px 14px;margin-bottom:12px;color:var(--muted);font-size:13px}
 .notice code{font-family:var(--mono);background:var(--bg2);padding:1px 6px;border-radius:4px;color:var(--text)}
+.notice .copybox{display:block;width:100%;margin-top:8px;height:36px;padding:0 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:13px}
 
 .list{border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
 .row{display:grid;grid-template-columns:44px 1fr auto;gap:0 12px;padding:11px 14px 11px 12px;border-top:1px solid var(--line);cursor:pointer;align-items:start}
@@ -549,6 +550,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
 
   <main class="main">
     <div id="notice"></div>
+    <div id="linkNote"></div>
     <div id="colHead"></div>
     <div class="bar">
       <div class="status"><span id="count"></span><span class="pill" id="conn"><i></i><span>연결 확인 중</span></span></div>
@@ -593,6 +595,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
    ================================================================ */
 const CFG=window.TOOLBOX_CONFIG||{};
 let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
+let COL_ERR='';       // 모음 조회 실패 메시지. 모음 링크가 기다리는 동안 이유를 보여 준다 (render 참고)
 const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
 // 설정을 받기 전 첫 화면을 그리는 데만 쓴다. id·이름은 schema.sql 의 기본 분야와 같아야 한다.
 const DEFAULT_CATS=[{id:'dev',name:'개발·도구',subs:[]},{id:'life',name:'생활·건강·취미',subs:[]},{id:'ai',name:'AI 에이전트',subs:[]},{id:'humor',name:'유머',subs:[]}];
@@ -631,12 +634,15 @@ function LocalStore(){
   syncItemCats(D.items,D.cats); LS.set(K.items,D.items); LS.set(K.cats,D.cats);
   const me={id:LS.get('toolbox.uid',null)||(()=>{ const v='u'+Math.random().toString(36).slice(2,10); LS.set('toolbox.uid',v); return v })(),name:LS.get('toolbox.name',''),email:'',admin:true};
   const subs=[]; let authCb=null;
-  const emit=()=>subs.forEach(cb=>cb({items:D.items.slice(),cats:D.cats.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.votes.slice()}));
+  // 미리보기는 늘 동기로 다 읽혀 있다. 내보낼 때마다 새로 읽은 것으로 친다 (followLink 참고)
+  let reads=0;
+  const emit=()=>{ reads++; subs.forEach(cb=>cb({items:D.items.slice(),cats:D.cats.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.votes.slice(),readItems:reads,readCols:reads,colsAt:performance.now()})); };
   const up=(arr,it)=>{ const i=arr.findIndex(x=>x.id===it.id); if(i>=0)arr[i]=it; else arr.push(it); };
   return {
     kind:'local',
     subscribe(cb){ subs.push(cb); emit(); },
     onAuth(cb){ authCb=cb; cb(me); },
+    afterAuth(cb){ cb(); },   // 미리보기에는 주소를 읽어 가는 인증이 없다
     async login(){ return {ok:true} }, async verifyCode(){ return {ok:true} }, async loginWith(){ return {ok:true} }, async logout(){},
     async setName(n){ me.name=n; LS.set('toolbox.name',n); authCb&&authCb(me); },
     async renamePast(n){ let c=0; D.items.forEach(i=>{ if(i.ownerId===me.id&&i.by!==n){ i.by=n; c++ } }); D.cols.forEach(x=>{ if(x.ownerId===me.id) x.by=n }); LS.set(K.items,D.items); LS.set(K.cols,D.cols); emit(); return c },
@@ -657,7 +663,10 @@ function LocalStore(){
 
 function SupabaseStore(){
   const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY);
-  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[],catsRaw:null};
+  // readItems·readCols: 제대로 읽어 반영한 횟수. 0 이면 아직 한 번도 못 읽은 것이다 —
+  // 그때의 빈 목록을 "없는 자료" 로 읽으면 멀쩡한 링크를 오진한다 (followLink 참고)
+  // colsAt: 반영한 모음 조회를 **쏜** 시각. 그 뒤에 만든 모음은 그 조회에 없다
+  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[],catsRaw:null,readItems:0,readCols:0,colsAt:0};
   const me={id:null,name:'',email:'',admin:false};
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({...D,items:D.items.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.myVotes.slice()}));
@@ -692,8 +701,9 @@ function SupabaseStore(){
       // 성공했으면 알약을 채널 상태로 되돌린다. 이게 없으면 한 번 실패해 빨개진 알약이
       // 그 뒤 조회가 다 성공해도 채널 상태가 바뀌기 전까지 영영 빨간 채로 남는다.
       if(error){ DB_ERR=error.message||'자료를 불러오지 못했습니다'; setConn('err'); ok=false; }
-      else if(take()){ DB_ERR=''; D.items=(data||[]).map(fromItem); if(liveAt) setConn('db'); } }
-    if(t==='collections'){ const {data,error}=await sb.from('collections').select('*'); if(error) ok=false; else if(take()) D.cols=(data||[]).map(fromCol); }
+      else if(take()){ DB_ERR=''; D.items=(data||[]).map(fromItem); D.readItems++; if(liveAt) setConn('db'); } }
+    // 실패를 남겨 둔다. 안 남기면 모음 링크는 "불러오는 중" 으로 끝없이 기다리고 초록 알약만 보인다
+    if(t==='collections'){ const at=now(), {data,error}=await sb.from('collections').select('*'); if(error){ COL_ERR=error.message||'모음을 불러오지 못했습니다'; ok=false; } else if(take()){ COL_ERR=''; D.cols=(data||[]).map(fromCol); D.readCols++; D.colsAt=at; } }
     if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(error) ok=false; else if(take()) D.reports=(data||[]).map(fromRep); } }
     if(t==='settings'){ const {data,error}=await sb.from('settings').select('value').eq('key','categories').maybeSingle();
       // list 말고도 들어 있는 값(버전 표시 등)은 그대로 들고 있다가 저장할 때 돌려준다
@@ -780,13 +790,20 @@ function SupabaseStore(){
      운영자 권한이 생겨도 검토함이 "신고 없음" 으로 남고(reports 는 RLS 가 좁혀 준 목록이라 저절로 안 넓어진다),
      권한이 없어져도 남의 신고가 화면에 남고, votes 는 실시간 발행 목록에 없어 추천 표시가 영영 낡는다.
      아끼는 것은 탭 복귀 8건 중 2건뿐이다. 요청을 줄이는 몫은 위의 연속성 판정이 이미 다 했다(8→3). */
-  sb.auth.onAuthStateChange((_ev,session)=>{ applySession(session); });
+  /* 첫 인증 이벤트(INITIAL_SESSION, 로그인 콜백이면 SIGNED_IN 이 먼저 올 수 있다)는 auth-js 가
+     주소의 토큰·오류를 다 읽은 뒤에 온다. 주소를 고쳐 쓰는 쪽은 이것을 기다린다 (afterAuth). */
+  let authSeen=false; const authWait=[];
+  sb.auth.onAuthStateChange((_ev,session)=>{ if(!authSeen){ authSeen=true; authWait.splice(0).forEach(f=>f()); } applySession(session); });
   return {
     kind:'db',
     subscribe(cb){ subs.push(cb); emit(); loadAll(); },
+    reloadCols(){ return load('collections'); },   // 모음 링크의 "다시 불러오기"
     onAuth(cb){ authCb=cb; cb(me); },
+    afterAuth(cb){ authSeen?cb():authWait.push(cb); },
+    // 돌아올 주소에는 우리 키만 붙인다(보던 자료로 돌아오게). 해시는 절대 안 된다 — 서버가 토큰을
+    // 문자열로 '#' 뒤에 이어 붙여 '#…#access_token' 이 되고, auth-js 가 못 읽어 로그인이 조용히 실패한다.
     async login(email){
-      const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname}});
+      const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname+linkQuery()}});
       if(error) fail(error,'로그인 메일을 보내지 못했습니다'); return {ok:true};
     },
     async verifyCode(email,code){
@@ -794,7 +811,7 @@ function SupabaseStore(){
       if(error) fail(error,'코드가 맞지 않습니다'); return {ok:true};
     },
     async loginWith(provider){
-      const {error}=await sb.auth.signInWithOAuth({provider,options:{redirectTo:location.origin+location.pathname}});
+      const {error}=await sb.auth.signInWithOAuth({provider,options:{redirectTo:location.origin+location.pathname+linkQuery()}});
       if(error) fail(error,'로그인을 시작하지 못했습니다'); return {ok:true};
     },
     async logout(){ await sb.auth.signOut(); },
@@ -1045,6 +1062,9 @@ const hay=it=>[it.title,it.url,it.body,it.lang,catOfItem(it),it.sub,(it.tags||[]
 const curCol=()=>S.col?S.cols.find(c=>c.id===S.col):null;
 function filtered(){
   const p=parseQ(S.q); const col=curCol();
+  // 모음 id 가 아직 안 풀렸으면(읽는 중·읽기 실패·새로 만든 직후) 넓히지 않는다.
+  // 모음 필터를 빼고 전체를 보이면 링크를 받은 사람은 그게 모음인 줄 안다 (render 가 이유를 띄운다)
+  if(S.col&&!col) return [];
   let list=S.items.filter(it=>{
     if(col&&!(col.itemIds||[]).includes(it.id)) return false;
     if(S.mine&&it.ownerId!==ME.id) return false;
@@ -1106,6 +1126,11 @@ $('#partners').addEventListener('click',e=>{
 });
 
 function render(){
+  linkMoved();   // 링크의 자료를 풀기 전에 사용자가 먼저 움직였는지 적어 둔다 (followLink 가 그 화면을 덮지 않게)
+  urlSoon();   // 주소는 이 렌더가 끝난 뒤에 모아서 반영한다 (render 가 S.cursor 를 고치므로 앞에서 읽으면 안 된다)
+  // 목록에 **없는** 모음으로 옮긴 시각 (followLink 의 삭제 판정). 이미 있는 모음을 누른 것까지 옮기면
+  // 그 전에 쏜 조회가 "그 모음은 지워졌다" 고 알려 와도 판정을 건너뛰어, 조용히 전체 목록으로 넓어진다
+  if(S.col!==colR){ colR=S.col; if(S.col&&!curCol()) colAt=performance.now(); }
   renderMe(); renderRail(); renderPartners(); renderReviewBtn();
   const inReview=S.view==='review';
   $('#list').hidden=inReview; $('#review').hidden=!inReview; $('#colHead').hidden=inReview; document.querySelector('.bar').hidden=inReview;
@@ -1115,6 +1140,14 @@ function render(){
   const el=$('#list');
   if(!list.length){
     if(DB_ERR){ el.innerHTML=`<div class="empty"><b>자료를 불러오지 못했습니다</b>${esc(DB_ERR)}<br>새로고침해 보시고, 계속되면 운영자에게 알려 주세요.</div>`; return; }
+    // 모음이 아직 안 풀렸다(filtered 가 비워 둔다). 기다리는 중인지, 못 읽었는지를 보이게 한다.
+    // 미리보기(supabase-js·config.js 를 못 불러옴)에는 공유된 모음이 없으므로 기다려도 안 온다
+    if(S.col&&!curCol()){
+      el.innerHTML=store&&!linkOn()?`<div class="empty"><b>미리보기 모드라 링크의 모음을 열 수 없습니다</b>연결 상태를 확인하고 새로 고침해 주세요.</div>`
+        :COL_ERR?`<div class="empty"><b>모음을 불러오지 못했습니다</b>${esc(COL_ERR)}<br><button type="button" class="btn small" data-colretry style="margin-top:10px">다시 불러오기</button></div>`
+        :`<div class="empty"><b>모음을 불러오는 중입니다</b>잠시만 기다려 주세요.</div>`;
+      return;
+    }
     const anyFilter=S.q||S.type!=='all'||S.catId!=='all'||S.tag||S.col||S.mine;
     el.innerHTML=`<div class="empty"><b>${anyFilter?'검색 결과가 없습니다':'아직 항목이 없습니다'}</b>${anyFilter?'다른 단어로 찾거나 필터를 지워 보세요. <code>type:</code> <code>cat:</code> <code>#태그</code> 문법을 쓸 수 있습니다.':'오른쪽 위 <code>＋ 추가</code> 로 첫 자료를 올려 보세요.'}</div>`;
     return;
@@ -1154,7 +1187,8 @@ function detail(it){
     <div class="actions">
       ${su?`<a class="btn small" href="${esc(su)}" target="_blank" rel="noopener">열기 ↗</a>`:''}
       ${it.type==='snippet'?`<button class="btn small" data-copy="${esc(it.id)}">코드 복사</button>`:''}
-      ${it.url?`<button class="btn small" data-copyurl="${esc(it.id)}">주소 복사</button>`:''}
+      ${it.url?`<button class="btn small" data-copyurl="${esc(it.id)}" title="자료가 가리키는 바깥 주소를 복사합니다">원본 주소 복사</button>`:''}
+      ${linkOn()?`<button class="btn small" data-share="${esc(it.id)}" title="이 자료로 바로 오는 빠른 연결 주소를 복사합니다">링크 복사</button>`:''}
       <button class="btn small" data-tocol="${esc(it.id)}">▤ 모음에 담기</button>
       ${own?`<button class="btn small" data-edit="${esc(it.id)}">수정</button><button class="btn small ghost danger" data-del="${esc(it.id)}">삭제</button>`:`<button class="btn small ghost${rep?'':' danger'}" data-report="${esc(it.id)}" ${rep?'disabled':''}>${rep?'신고됨':'신고'}</button>`}
       <span class="by">${it.by?esc(it.by)+' · ':''}${new Date(it.createdAt).toLocaleString('ko-KR')}${it.updatedAt?' · 수정됨':''}${it.ownerId&&it.ownerId===ME.id?' · 내 글':''}</span>
@@ -1219,7 +1253,7 @@ function renderColHead(){
   if(!c){ el.innerHTML=''; return; }
   const own=canEdit(c);
   el.innerHTML=`<div class="colhead"><div><div class="crumb">모음 · ${esc(c.by||'')} · ${rel(c.createdAt)}</div><h2>▤ ${esc(c.title)}</h2>${c.desc?`<p>${esc(c.desc)}</p>`:''}</div>
-    <div class="sp">${own?`<button class="btn small" data-coledit="${esc(c.id)}">수정</button><button class="btn small ghost danger" data-coldel="${esc(c.id)}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
+    <div class="sp">${linkOn()?`<button class="btn small ghost" data-colshare="${esc(c.id)}" title="이 모음으로 바로 오는 빠른 연결 주소를 복사합니다">링크 복사</button>`:''}${own?`<button class="btn small" data-coledit="${esc(c.id)}">수정</button><button class="btn small ghost danger" data-coldel="${esc(c.id)}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
 }
 function renderReviewBtn(){ $('#reviewBtn').hidden=!isMod(); $('#reviewCnt').textContent=S.reports.length; }
 function renderReview(){
@@ -1275,6 +1309,7 @@ $('#home').addEventListener('click',e=>{ e.preventDefault(); Object.assign(S,{q:
 $('#colHead').addEventListener('click',e=>{
   const ed=e.target.closest('[data-coledit]'); if(ed) return openColForm(S.cols.find(c=>c.id===ed.dataset.coledit));
   const dl=e.target.closest('[data-coldel]'); if(dl) return delCol(dl.dataset.coldel);
+  const sh=e.target.closest('[data-colshare]'); if(sh) return shareLink('c',sh.dataset.colshare,(curCol()||{}).title);
   if(e.target.closest('[data-colclose]')){ S.col=null; render(); }
 });
 $('#review').addEventListener('click',async e=>{
@@ -1284,9 +1319,11 @@ $('#review').addEventListener('click',async e=>{
   const c=e.target.closest('[data-rvclear]'); if(c){ await clearReports(c.dataset.rvclear); toast('신고를 닫았습니다'); }
 });
 $('#list').addEventListener('click',async e=>{
+  if(e.target.closest('[data-colretry]')) return retryCols();
   const v=e.target.closest('[data-vote]'); if(v){ e.stopPropagation(); return vote(v.dataset.vote); }
   const cp=e.target.closest('[data-copy]'); if(cp) return copy(byId(cp.dataset.copy).body||'');
   const cu=e.target.closest('[data-copyurl]'); if(cu) return copy(byId(cu.dataset.copyurl).url||'');
+  const sh=e.target.closest('[data-share]'); if(sh) return shareLink('i',sh.dataset.share,byId(sh.dataset.share).title);
   const ed=e.target.closest('[data-edit]'); if(ed) return openForm(byId(ed.dataset.edit));
   const dl=e.target.closest('[data-del]'); if(dl) return del(dl.dataset.del);
   const rp=e.target.closest('[data-report]'); if(rp) return openReportForm(byId(rp.dataset.report));
@@ -1376,7 +1413,10 @@ async function delCol(id){
   const c=S.cols.find(x=>x.id===id); if(!c) return;
   if(!canEdit(c)){ toast('만든 사람과 운영자만 삭제할 수 있습니다'); return; }
   if(!confirm(`"${c.title}" 모음을 삭제할까요? 안의 항목은 지워지지 않습니다.`)) return;
-  try{ await store.removeCol(id); if(S.col===id) S.col=null; toast('모음을 삭제했습니다'); }catch(e){ toast('삭제하지 못했습니다 ('+(e.code||'오류')+')'); }
+  // 보던 모음이면 지우기 **전에** 푼다. 미리보기 저장소는 지우는 도중에 다시 그리므로,
+  // 뒤에서 풀면 followLink 가 "보고 있던 모음이 삭제되었습니다" 를 함께 띄운다
+  const was=S.col===id; if(was) S.col=null;
+  try{ await store.removeCol(id); toast('모음을 삭제했습니다'); }catch(e){ if(was&&!S.col) S.col=id; toast('삭제하지 못했습니다 ('+(e.code||'오류')+')'); render(); }
 }
 
 /* ================================================================
@@ -2175,6 +2215,153 @@ function openIO(){
 }
 
 /* ================================================================
+   링크 공유 (1판)   ?i=자료id  ?c=모음id  ?cat=분야id  ?q=검색어
+   ---------------------------------------------------------------
+   주소는 루트의 쿼리만 쓴다. 경로(/i/abc)는 config.js 를 상대 주소로 불러 미리보기 모드로 조용히 떨어지고,
+   해시는 로그인 토큰(#access_token)의 자리다. 하위분야·태그는 이름으로 거르므로 넣지 않는다
+   (이름을 바꾸면 옛 링크가 조용히 빈 목록이 된다).
+   키 이름에 access_token·error·error_description·code·type·sb 를 쓰면 안 된다. auth-js 가 쿼리를
+   해시보다 먼저 읽어 로그인 콜백으로 오인하고 **세션을 지운다.**
+   ================================================================ */
+let urlOn=false, urlT=0, colsSeen=0, colR=null, colAt=0;
+// 미리보기 자료는 이 브라우저에만 있어서 남이 링크를 열어도 없다
+const linkOn=()=>!!store&&store.kind==='db';
+// 링크가 가리키는 것을 못 찾았을 때. 토스트는 3초면 사라지므로 닫을 때까지 목록 위에 남긴다. id 를 주면 '보기' 를 붙인다
+function linkNote(msg,id){ $('#linkNote').innerHTML=`<div class="notice">${esc(msg)} ${id?`<button type="button" class="btn small" data-note-open="${esc(id)}">보기</button> `:''}<button type="button" class="btn small ghost" data-note-close>닫기</button></div>`; toast(msg); }
+$('#linkNote').addEventListener('click',e=>{
+  if(e.target.closest('[data-note-close]')){ $('#linkNote').innerHTML=''; return; }
+  const b=e.target.closest('.copybox'); if(b){ b.select(); b.setSelectionRange(0,b.value.length); return; }
+  const o=e.target.closest('[data-note-open]'); if(!o) return;
+  const id=o.dataset.noteOpen; $('#linkNote').innerHTML='';
+  if(!S.items.some(x=>x.id===id)) return linkNote('링크의 자료가 그사이 삭제되었습니다.');
+  openLinked(id); render(); scrollToRow(id);
+});
+// 모음 "다시 불러오기". 누르자마자 "불러오는 중" 으로 바꿔 눌렸다는 것을 보인다
+function retryCols(){
+  COL_ERR=''; render();
+  Promise.resolve().then(()=>store.reloadCols()).catch(e=>{ COL_ERR=(e&&e.message)||'모음을 불러오지 못했습니다'; render(); });
+}
+// 주소는 읽기만 한다. 우리 키 넷만 본다 — 로그인 실패로 붙은 error* 키 등은 쳐다보지 않는다
+function readLink(){
+  const p=new URLSearchParams(location.search), o={i:null,c:null,cat:null,q:p.get('q')||'',key:'',moved:false,held:false}; let bad=false;
+  ['i','c','cat'].forEach(k=>{ const v=p.get(k); if(!v) return; if(okId(v)) o[k]=v; else bad=true; });
+  // 문장 끝 괄호·마침표가 주소에 붙어 오는 일이 흔하다. 조용히 넘기면 링크가 틀린 줄 모르고 전체 목록만 본다
+  if(bad) linkNote('링크 주소 일부가 잘못되어 무시했습니다. 보낸 분께 링크를 다시 받아 주세요.');
+  return o;
+}
+// 지금 펼쳐져 보이는 자료. S.sel 은 필터에 가려 안 보일 때도 남아 있으므로 화면을 본다
+function openId(){
+  if(S.view!=='list'||!okId(S.sel)) return null;
+  const d=$('#list .detail'), r=d&&d.closest('.row');
+  return r&&r.dataset.id===S.sel?S.sel:null;
+}
+// 링크가 건 화면의 열쇠. 링크의 자료를 풀기 전에 이것이 달라지면 사용자가 먼저 움직인 것이다 (검색·분야·모음·자료 열기 등)
+function linkKey(){ return [S.view,S.q,S.type,S.catId,S.sub,S.tag,S.col,S.mine,S.sel].join('\n'); }
+// 한 번 움직였으면 되돌려도 움직인 것으로 둔다. 느린 망에서 검색어를 치던 중에 링크가 풀리면 입력이 지워진다
+function linkMoved(){ if(LINK.i&&!LINK.moved&&linkKey()!==LINK.key) LINK.moved=true; return LINK.moved; }
+// 우리 키만 담은 쿼리 ('' 또는 '?…'). 기본값은 뺀다. 아직 못 푼 링크의 자료 id 는 그대로 들고 간다 —
+// 불러오기가 늦거나 실패한 사이 주소에서 지워 버리면 새로 고침으로 되살릴 길이 없다.
+// 단 사용자가 먼저 움직였으면 뺀다. 남기면 다른 자료를 열었다 닫은 뒤 주소가 본 적도 없는 자료를 가리킨다
+function linkQuery(){
+  const p=new URLSearchParams(), i=openId()||(LINK.moved?null:LINK.i), q=S.q.trim();
+  if(i) p.set('i',i);
+  if(okId(S.col)) p.set('c',S.col);
+  if(S.catId!=='all'&&okId(S.catId)) p.set('cat',S.catId);
+  if(q) p.set('q',q);
+  const t=p.toString(); return t?'?'+t:'';
+}
+/* 주소 반영. replaceState 만 쓴다 (1판은 뒤로 가기 기록을 만들지 않는다).
+   - **첫 인증 이벤트 전에는 쓰지 않는다** (urlOn). navigator.locks 가 있는 브라우저(크롬 포함)는 auth-js 가
+     시작 스크립트가 다 돈 뒤에 주소를 읽는다. 그 전에 고쳐 쓰면 #access_token 이 지워져 로그인이 오류 없이 실패한다
+   - 해시는 늘 그대로 붙인다. 해시에 로그인 토큰이 남아 있으면 아예 쓰지 않는다 (writeUrl 안의 설명)
+   - 우리 키만 다시 쓰므로 로그인 실패로 쿼리에 붙은 error·error_code·error_description 도 여기서 걷힌다.
+     안 걷으면 그 주소를 새로 고칠 때마다 auth-js 가 실패한 콜백으로 읽고 **조용히 로그아웃시킨다**
+   - 렌더마다 쓰지 않고 멈춘 뒤 한 번 쓴다. 검색창 한 글자마다 쓰면 브라우저의 기록 호출 한도에 걸린다 */
+function urlSoon(){ clearTimeout(urlT); if(urlOn) urlT=setTimeout(writeUrl,350); }
+function writeUrl(){
+  try{
+    // auth-js 는 토큰 확인이 실패하면 해시를 안 지우고, 로그인 뒤 뒤로 가기를 누르면 토큰이 든 기록으로 돌아온다.
+    // 거기에 검색어·분야를 붙여 쓰면 공유용처럼 보이는 주소가 되어, 주소창을 복사해 보내는 순간
+    // 받은 사람이 **보낸 사람으로 로그인된다.** 그런 주소는 공유용으로 꾸미지 않는다
+    const h=new URLSearchParams(location.hash.slice(1));
+    if(h.has('access_token')||h.has('refresh_token')||h.has('provider_token')) return;
+    const next=location.pathname+linkQuery()+location.hash;
+    if(next!==location.pathname+location.search+location.hash) history.replaceState(history.state,'',next);
+  }catch(e){ console.warn('주소를 반영하지 못했습니다',e); }   // 곁가지다. 여기서 던지면 부른 쪽이 멈춘다
+}
+/* 링크가 가리키는 자료·모음을 푼다. store 가 자료를 줄 때마다, 그리기 전에 부른다.
+   **한 번이라도 제대로 읽은 뒤에만** 판단한다. 읽기 전의 빈 목록이나 실패한 조회를 "없음" 으로 읽으면
+   멀쩡한 링크를 삭제된 자료로 오진한다. 실패했으면 다음 조회까지 기다린다.
+   링크로는 고르고·거르고·스크롤만 한다. **수정 창은 절대 열지 않는다** (openForm({}) 이 운영자에게 빈 수정 창을 연다).
+   고른 자료 id 를 돌려주면 부른 쪽이 그린 뒤 **한 번만** 스크롤한다 (실시간·탭 복귀로 다시 그릴 때마다 튀지 않게). */
+function followLink(d){
+  // 모음은 모음 목록을 새로 읽었을 때만 본다. 모음을 만들고 곧바로 S.col 을 옮기는 경로가 있어,
+  // 다른 표 때문에 그린 순간에 보면 방금 만든 모음을 "삭제됨" 으로 오진한다
+  if(d.readCols&&d.readCols!==colsSeen){
+    colsSeen=d.readCols;
+    // 없는 모음 id 는 조용히 "전체 자료" 로 넓어진다. 보고 있던 모음을 남이 지운 경우도 여기서 잡힌다.
+    // 단 모음을 옮기기 **전에** 쏜 조회로는 판정하지 않는다. 새 모음을 저장하는 사이 이미 떠 있던 조회가
+    // 늦게 도착하면 그 모음을 모르므로, 방금 만든 모음이 "삭제되었습니다" 로 닫힌다. 저장이 다시 읽기를 부르니 그때 본다
+    // 미리보기(supabase-js·config.js 를 못 불러옴)는 이 브라우저의 모음만 안다. 거기 없다고 "삭제되었습니다" 라 하면
+    // 원인을 잘못 짚고 주소에서도 지워진다. 판정하지 않고 두면 render 가 미리보기라서 못 연다고 띄운다
+    if(S.col&&!curCol()&&d.colsAt>=colAt&&linkOn()){
+      linkNote(S.col===LINK.c?'링크의 모음을 찾을 수 없습니다. 삭제되었거나 주소가 잘못되었습니다.':'보고 있던 모음이 삭제되었습니다.');
+      S.col=null; if(!LINK.moved) LINK.key=linkKey();   // 사용자가 옮긴 것이 아니다
+    }
+    LINK.c=null;
+  }
+  // 모음이 걸려 있으면 그 안의 자료인지는 모음을 읽어야 안다
+  if(!LINK.i||LINK.held||!d.readItems||(S.col&&!colsSeen)) return null;
+  const id=LINK.i, has=S.items.some(x=>x.id===id);
+  // 미리보기에는 공유된 자료가 없다. "삭제되었습니다" 라 하고 주소에서 지우면 원인을 잘못 짚고,
+  // 연결이 돌아와 새로 고쳐도 링크가 없다. 한 번 알리고 주소에는 남긴다 (예시 자료 id 는 그대로 열린다)
+  if(!has&&!linkOn()){ LINK.held=true; linkNote('미리보기 모드라 링크의 자료를 열 수 없습니다. 연결 상태를 확인하고 새로 고침해 주세요.'); return null; }
+  const moved=linkMoved(); LINK.i=null;
+  // 1000행 상한에 잘려 안 들어온 자료도 여기서 "없음" 이 된다 (todo.md 1000행 상한)
+  if(!has){ linkNote('링크의 자료를 찾을 수 없습니다. 삭제되었거나 주소가 잘못되었습니다.'); return null; }
+  // 기다리는 사이 사용자가 먼저 움직였으면 그 화면을 덮지 않는다 — 치던 검색어가 지워지고 고른 자료가 바뀐다. 알리고 고르게 한다
+  if(moved){ if(S.sel!==id) linkNote('링크로 받은 자료를 불러왔습니다.',id); return null; }
+  openLinked(id); return id;
+}
+// 필터에 가려 안 보이면 검토함의 '보기' 처럼 필터를 푼다
+function openLinked(id){
+  if(S.view!=='list'||!filtered().some(x=>x.id===id)){
+    Object.assign(S,{view:'list',q:'',type:'all',catId:'all',sub:null,tag:null,col:null,mine:false,cursor:-1}); $('#q').value='';
+  }
+  S.sel=id;
+}
+// 머리줄이 떠 있어서(sticky) 그냥 scrollIntoView 하면 제목이 그 밑에 숨는다
+function scrollToRow(id){
+  const r=$('#list').querySelector(`.row[data-id="${id}"]`); if(!r) return;
+  r.style.scrollMarginTop=($('.top').offsetHeight+8)+'px'; r.scrollIntoView({block:'start'});
+}
+/* 링크 복사. 우리 키 하나만 붙인다. location.href 로 만들면 로그인 실패로 남은 error* 키나 빈 '#', 검색어가 딸려 간다.
+   터치 기기에 공유 창이 있으면 그걸 연다(메신저로 바로 보낸다). 사용자가 닫으면 AbortError 인데 실패가 아니다. */
+async function shareLink(key,id,title){
+  if(!okId(id)) return;
+  const url=location.origin+location.pathname+'?'+key+'='+id;
+  if(navigator.share&&matchMedia('(pointer:coarse)').matches){
+    try{ await navigator.share({title:title||document.title,url}); return; }
+    catch(e){ if(e&&e.name==='AbortError') return; }   // 그 밖의 실패는 복사로 넘긴다
+  }
+  try{ await navigator.clipboard.writeText(url); toast('링크를 복사했습니다'); }
+  catch(e){ copyBox(url); }
+}
+/* 복사가 막혔을 때. copy() 처럼 "직접 선택해 복사해 주세요" 만 띄우면 막다른 길이다 — 이 주소는 화면 어디에도 없다.
+   카카오톡 안 브라우저는 clipboard 쓰기를 막고 공유 창도 없어서, 주 사용자가 늘 이 길로 온다.
+   고를 수 있게 띄우고, 옛 방식 복사도 한 번 해 본다 */
+function copyBox(url){
+  const n=$('#linkNote');
+  n.innerHTML=`<div class="notice"><span data-boxmsg></span> <button type="button" class="btn small ghost" data-note-close>닫기</button><input class="copybox" readonly value="${esc(url)}" aria-label="링크"></div>`;
+  const inp=n.querySelector('.copybox');
+  n.style.scrollMarginTop=($('.top').offsetHeight+8)+'px'; n.scrollIntoView({block:'start'});   // 목록 아래쪽에서 눌러도 보이게
+  inp.focus({preventScroll:true}); inp.select(); inp.setSelectionRange(0,url.length);
+  let ok=false; try{ ok=document.execCommand('copy'); }catch(e){}
+  n.querySelector('[data-boxmsg]').textContent=ok?'링크를 복사했습니다. 붙여 넣기가 안 되면 아래 링크를 길게 눌러 복사해 주세요.':'자동으로 복사하지 못했습니다. 아래 링크를 길게 눌러 복사해 주세요.';
+  toast(ok?'링크를 복사했습니다':'자동으로 복사하지 못했습니다. 띄운 링크를 복사해 주세요.');
+}
+
+/* ================================================================
    시작
    ================================================================ */
 function setConn(kind){
@@ -2193,6 +2380,12 @@ document.title=CFG.SITE_NAME||'빠른 연결'; $('#siteName').textContent=CFG.SI
     el.addEventListener('toggle',()=>LS.set('toolbox.open.'+id,el.open));
   });
 })();
+// 링크로 들어온 뜻. store(createClient)를 만들기 전에 읽는다. 분야·검색어·모음은 바로 걸고, 자료는 읽은 뒤에 푼다
+const LINK=readLink();
+if(LINK.cat) S.catId=LINK.cat;
+if(LINK.q){ S.q=LINK.q; $('#q').value=LINK.q; }
+if(LINK.c) S.col=LINK.c;
+LINK.key=linkKey();   // 여기서부터 달라지면 사용자가 움직인 것이다 (linkMoved)
 render();
 (function(){
   const ready=CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase;
@@ -2212,7 +2405,9 @@ render();
   });
   // 키를 갈았다. 옛 'toolbox.openCats' 에는 분야 이름이 들어 있어 id 와 영영 안 맞는다.
   S.openCatIds=(LS.get('toolbox.openCatIds',[])||[]).filter(x=>typeof x==='string');
-  store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); render(); });
+  // 분야 링크는 사이드바에서도 그 분야를 펼친다 (분야를 누를 때와 같게)
+  if(LINK.cat&&LINK.cat!=='all'&&!S.openCatIds.includes(LINK.cat)){ S.openCatIds=[...S.openCatIds,LINK.cat]; LS.set('toolbox.openCatIds',S.openCatIds); }
+  store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); const go=followLink(d); render(); if(go) scrollToRow(go); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));
   if(ready&&h.get('error')){
@@ -2222,6 +2417,10 @@ render();
     openLogin(why);
     if(code==='otp_expired') $('#lfHave').click();
   }
+  // 주소 쓰기는 여기서 연다 — 위의 오류 안내가 해시를 읽은 뒤이고, 실제로 열리는 것은 첫 인증 이벤트 뒤다.
+  // 인증이 끝내 안 오면(저장소 막힘 등) 5초 뒤에 연다. 그때도 해시는 그대로 두므로 토큰을 지우지 않는다.
+  const openUrl=()=>{ if(!urlOn){ urlOn=true; urlSoon(); } };
+  store.afterAuth(openUrl); setTimeout(openUrl,5000);
 })();
 </script>
 </body>
