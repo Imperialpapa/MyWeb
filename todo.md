@@ -159,12 +159,21 @@
   - 익명 방문자의 실시간 연결은 publishable 키로 **최대 24시간**이다. 지금 코드는 채널이 닫히면 알약만 빨개지고 다시 붙지 않는다. 로그아웃 뒤 만료된 사용자 JWT 로 다시 붙는 기존 문제도 같은 곳이다
   **순서 (옛 키는 7단계 전까지 켜 둔다)**
   1. **AI 함수**: publishable 키 우선·anon 대비, `getUser` 오류를 로그인 실패와 서버 문제로 가르기, supabase-js 버전 고정. 배포: `npx supabase functions deploy ai`
+     → **코드 완료·커밋** (2026-09-14). **배포는 아직**. 배포 뒤 확인:
+     - 로그인한 상태에서 **✦ AI 분류 제안** 한 번 → 결과가 나오면 정상 (이 경로는 실제 사용자 토큰이 필요해 자동 시험에서 못 봤다)
+     - 대시보드 Edge Functions → ai → Logs 에 `"keySource":"publishable"` 이 찍히는지, `"authFail":"server"` 줄이 없는지
+     - Edge Functions → ai 에서 JWT 검사가 **꺼져** 있는지 (배포가 config.toml 을 따르지만 대시보드 토글로 다시 켜질 수 있다)
+     - 문제면 재배포 없이 되돌리기: `npx supabase secrets set --project-ref csxndscngmkciibarumi KEY_SOURCE=anon` → 원인 확인 뒤 `npx supabase secrets unset --project-ref csxndscngmkciibarumi KEY_SOURCE`
+     - 로그 줄 모양: 실패 `{"authFail":"user|server|config","stage":"key|prefilter|client|getUser|profile",...}`, 사용량 줄에 `keySource`,
+       로그인 뒤 DB 읽기 실패 `{"readFail":"settings|quota|taxonomy-items|expand-items|expand-dup",...}` (아래 "오류를 버리던 DB 읽기" 참고)
   2. **실시간 스스로 다시 붙기**: 닫히면 채널을 지우고 토큰을 새로 설정한 뒤 다시 구독(세대 번호로 무한 반복 방지)
   3. **키 고르기를 한 곳에서**: `config.js` 에 `SUPABASE_PUBLISHABLE_KEY` 를 **빈 값으로** 추가, `index.html` 의 `createClient` 와 `ready` 판정, `keepalive.yml` 이 모두 `PUBLISHABLE || ANON` 을 쓴다
   4. 로컬에서 새 키로 먼저 시험 (익명 목록·실시간, 메일 코드 로그인, 추천, AI)
   5. **전환** = `config.js` 에 publishable 키를 채워 푸시(공개돼도 되는 키). 되돌리기 = 비우고 푸시. 푸시 뒤 keepalive 를 손으로 한 번 돌린다
   6. 1~2주 두고 본다 (옛 키를 든 채 오래 열린 탭, 특히 운영자 탭을 새로 고치게)
-  7. 대시보드 Settings → API Keys 에서 **옛 키 끄기** → 곧바로 5단계 점검. 문제면 다시 켠다
+  7. 대시보드 Settings → API Keys 에서 **옛 키 끄기** → 곧바로 5단계 점검. 문제면 다시 켠다.
+     **끄기 전에 `npx supabase secrets list --project-ref csxndscngmkciibarumi` 에 `KEY_SOURCE` 가 없는지 볼 것.**
+     남아 있으면 끄는 순간 로그인한 사람 전원이 503 이 되어 새 키가 고장 난 것처럼 보인다
   8. 안정되면 `SUPABASE_ANON_KEY` 대비 코드를 **한 커밋에서** 모두 걷는다
 - [x] **`schema.sql` 재실행 + 함수 재배포 완료** (2026-09-09).
   `ai_take_quota(lim, cost)`·`ai_refund_quota(cost)`·`mark_checked(ids)`·`items.checked_at` 반영 확인,
@@ -512,6 +521,13 @@
   - `ai_refund_quota` 는 "지금 날짜" 행을 깎는다. 30~60초짜리 요청이 자정을 넘겨 실패하면 환불이 다음 날로 간다 (드묾)
   - 1번 섹션 라디오 옆 개수는 창을 열 때 센 값이다. 처리 대상은 누를 때 다시 세므로 안전하지만 숫자는 낡을 수 있다
   - IPv6 리터럴 주소(`http://[2606:...]`)는 링크 점검에서 통째로 "확인 불가" 가 된다. 자동으로 버리지는 않는다
+- [x] **AI 함수에서 "오류를 버리던" DB 읽기 고침** (2026-09-14, 키 교체 검토에서 발견). **함수 재배포로 반영** — 위 키 교체 1단계 배포에 같이 실린다
+  - 분야 구조 개편안(taxonomy)의 자료 조회 실패 → 이제 500 으로 멈춘다. 전에는 "전체 자료 0개" 로 만든 개편안을 돌려주고
+    화면은 `r.itemCount||S.items.length` 로 가려 운영자는 N개로 만든 줄 알았다. 사용량을 깎기 전이라 환불할 것은 없다
+  - 자료 채우기(expand)의 URL 중복 재확인 실패 → 500. 전에는 중복 판정이 조용히 약해졌다. AI 응답은 받았어도 사용량은 돌려준다
+  - 로그 없이 500 만 내던 다섯 곳에 한 줄 로그: `{"readFail":"settings|quota|taxonomy-items|expand-items|expand-dup","reply":500,"status":..,"code":..,"msg":..,"keySource":..}`.
+    `authFail` 과 키 이름을 달리해 로그인 문제를 찾을 때 섞이지 않는다. msg 의 토큰·키 모양 값은 가린다
+  - 가짜 Supabase·Anthropic 서버 시험 63가지 통과(새로 7가지: 다섯 곳 실패 + taxonomy·expand 정상 경로). tsc 오류는 고치기 전과 같은 둘(SDK 타입)뿐
 - [ ] **스트리밍 전환에서 알면서 남긴 것** (2026-09-09)
   - 스트림 도중 오는 API 오류(과부하·레이트리밋)는 상태 코드 없이 던져져, 문구가 원인과 어긋나고
     SDK 자동 재시도도 걸리지 않는다. `.stream()` + `finalMessage()` 로 바꾸면 함께 해결된다

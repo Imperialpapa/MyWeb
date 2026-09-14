@@ -436,16 +436,27 @@ function classifyAuthError(e: unknown, httpStatus = 0) {
 
 // 로그인·권한 확인 실패는 전부 한 줄 JSON 으로 남긴다 (대시보드 Edge Functions → ai → Logs). stage 가 어디서 멈췄는지 알려 준다.
 // 토큰과 키 값은 절대 싣지 않는다. 키는 어디서 왔는지(keySource)만. 오류 문구에 섞여 들어온 것도 가린다.
+const scrub = (m: unknown) =>
+  String(m || "").replace(/eyJ[\w-]*\.[\w-]*\.[\w-]*/g, "[jwt]").replace(/sb_[a-z]+_[\w-]+/gi, "[key]").slice(0, 200);
 function logAuthFail(
   kind: "user" | "server" | "config",
   f: { stage: string; reply: number; keySource?: string; status?: number; code?: string; msg?: string },
 ) {
-  const msg = String(f.msg || "")
-    .replace(/eyJ[\w-]*\.[\w-]*\.[\w-]*/g, "[jwt]").replace(/sb_[a-z]+_[\w-]+/gi, "[key]").slice(0, 200);
   const line = JSON.stringify({
-    authFail: kind, stage: f.stage, reply: f.reply, keySource: f.keySource || "", status: f.status || 0, code: f.code || "", msg,
+    authFail: kind, stage: f.stage, reply: f.reply, keySource: f.keySource || "", status: f.status || 0, code: f.code || "", msg: scrub(f.msg),
   });
   if (kind === "user") console.warn(line); else console.error(line);
+}
+
+// 로그인을 통과한 뒤의 DB 읽기 실패도 한 줄 남긴다. 키 이름을 authFail 과 달리 해 로그인 문제를 찾을 때 섞이지 않게 한다.
+// 없으면 운영자는 "읽지 못했습니다" 문구만 받고 로그는 비어, DB 재시작인지 권한·스키마 문제인지 가를 수 없다.
+function logReadFail(
+  stage: string,
+  f: { reply: number; keySource: string; status?: number; error: { code?: string; message?: string } },
+) {
+  console.error(JSON.stringify({
+    readFail: stage, reply: f.reply, keySource: f.keySource, status: f.status || 0, code: String(f.error.code || ""), msg: scrub(f.error.message),
+  }));
 }
 
 Deno.serve(async (req) => {
@@ -526,8 +537,11 @@ Deno.serve(async (req) => {
   // ok: ask() 가 응답을 끝까지 받으면 true. keySource: ask() 가 사용량 로그 한 줄에 같이 남긴다
   const call = { ok: false, keySource: sbKey.source as string };
   const takeQuota = async (): Promise<Response | null> => {
-    const { data: ok, error } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user, cost });
-    if (error) return fail("사용량을 확인하지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
+    const { data: ok, error, status } = await sb.rpc("ai_take_quota", { lim: isAdmin ? DAILY_LIMIT.admin : DAILY_LIMIT.user, cost });
+    if (error) {
+      logReadFail("quota", { reply: 500, keySource: call.keySource, status, error });
+      return fail("사용량을 확인하지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
+    }
     if (ok === false) return fail("오늘 쓸 수 있는 AI 사용량을 모두 썼습니다. 내일 다시 시도해 주세요", 429);
     charged = cost;
     return null;
@@ -536,8 +550,11 @@ Deno.serve(async (req) => {
   // 분야 목록 (settings.categories)
   // 조회 오류를 버리면 안 된다. 못 읽은 것과 정말로 비어 있는 것은 다른 일인데,
   // 한데 뭉치면 분야가 멀쩡히 있는 운영자에게 "분야를 먼저 만들어 주세요" 가 나가 원인을 짚을 수 없다.
-  const { data: setting, error: setErr } = await sb.from("settings").select("value").eq("key", "categories").maybeSingle();
-  if (setErr) return fail("분야 목록을 읽지 못했습니다. 잠시 후 다시 시도해 주세요", 500);
+  const { data: setting, error: setErr, status: setStatus } = await sb.from("settings").select("value").eq("key", "categories").maybeSingle();
+  if (setErr) {
+    logReadFail("settings", { reply: 500, keySource: call.keySource, status: setStatus, error: setErr });
+    return fail("분야 목록을 읽지 못했습니다. 잠시 후 다시 시도해 주세요", 500);
+  }
   const cats: Cat[] = (((setting?.value as { list?: unknown })?.list as Cat[]) || [])
     .map((c) => ({
       id: cut(c.id, CAP.catId),
@@ -686,7 +703,13 @@ ${catsText(cats)}
 
     // ---------- 3) 분야 구조 개편안 (운영자) ----------
     if (action === "taxonomy") {
-      const { data: rows } = await sb.from("items").select("type,title,category,sub,tags").order("created_at", { ascending: false }).limit(MAX_TAXONOMY_ITEMS);
+      const { data: rows, error: rowsErr, status: rowsStatus } = await sb.from("items").select("type,title,category,sub,tags").order("created_at", { ascending: false }).limit(MAX_TAXONOMY_ITEMS);
+      // 오류를 버리면 AI 가 "전체 자료 0개" 로 받아 빈 자료로 만든 개편안을 돌려주고, 화면은 자료 수를 가려 운영자는 모른다.
+      // 사용량을 깎기 전이라 여기서 끝내면 환불할 것도 없다
+      if (rowsErr) {
+        logReadFail("taxonomy-items", { reply: 500, keySource: call.keySource, status: rowsStatus, error: rowsErr });
+        return fail("자료 목록을 읽지 못했습니다. 잠시 후 다시 시도해 주세요", 500);
+      }
       const list = (rows || []) as Pick<Row, "type" | "title" | "category" | "sub" | "tags">[];
       const system = `${SITE_RULES(idMode)}
 
@@ -790,6 +813,8 @@ ${idMode
       // 오류를 버리면 안 된다. 컬럼이 아직 없을 때 data 가 null 로 와서
       // "이 분야에는 아직 자료가 없다" 고 말한 뒤 이미 있는 것을 그대로 다시 제안하게 된다.
       if (sameCatRes.error || allRes.error) {
+        const bad = sameCatRes.error ? sameCatRes : allRes;
+        logReadFail("expand-items", { reply: 500, keySource: call.keySource, status: (bad as { status?: number }).status, error: bad.error! });
         return fail("자료를 읽지 못했습니다. schema.sql 을 최신으로 다시 실행했는지 확인해 주세요", 500);
       }
       const sameCat = sameCatRes.data, allRows = allRes.data;
@@ -922,7 +947,13 @@ ${topTags(allRows || []).map((t) => flat(t, CAP.tag)).filter(Boolean).join(", ")
       // 위 표본(limit)은 자료가 늘면 잘린다. 제안된 주소만 따로 한 번 더 조회해 확실히 본다.
       const askUrls = items.map((r: { url: string }) => r.url).filter(Boolean).slice(0, 50);
       if (askUrls.length) {
-        const { data: hitRows } = await sb.from("items").select("url").in("url", askUrls);
+        const { data: hitRows, error: hitErr, status: hitStatus } = await sb.from("items").select("url").in("url", askUrls);
+        // 오류를 버리면 중복 판정이 조용히 약해져, 이미 있는 자료가 "새 자료" 로 카드에 올라온다.
+        // AI 응답은 이미 받았지만 운영자 잘못이 아니므로 사용량은 돌려준다(ours)
+        if (hitErr) {
+          logReadFail("expand-dup", { reply: 500, keySource: call.keySource, status: hitStatus, error: hitErr });
+          throw Object.assign(new Error("이미 있는 자료와 겹치는지 확인하지 못했습니다. 잠시 후 다시 시도해 주세요"), { ours: true });
+        }
         (hitRows || []).forEach((r: { url?: string }) => { if (r.url) seenUrl.set(normUrl(r.url), "1"); });
       }
 
