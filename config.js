@@ -1,8 +1,13 @@
 // 빠른 연결 설정
-// Supabase 프로젝트 → Settings → API 에서 복사해 넣으세요.
-// anon key 는 공개되어도 되는 키입니다 (권한은 데이터베이스의 RLS 규칙이 지킵니다).
+// Supabase 프로젝트 → Settings → API Keys 에서 복사해 넣으세요.
+// publishable 키와 anon key 는 공개되어도 되는 키입니다 (권한은 데이터베이스의 RLS 규칙이 지킵니다).
+// secret 키(sb_secret_…)나 service_role 키는 절대 여기에 넣지 마세요. 이 파일은 누구나 받아 봅니다.
 window.TOOLBOX_CONFIG = {
   SUPABASE_URL: "https://csxndscngmkciibarumi.supabase.co",        // 예: https://abcdefghijk.supabase.co
+  // 새 publishable 키(sb_publishable_…). 채우면 아래 anon key 대신 이것을 씁니다.
+  // 옛 anon key 는 Supabase 가 2026년 말까지 폐지합니다. 옮기는 순서는 todo.md 참고.
+  // **SUPABASE_ANON_KEY 줄은 옮기기가 끝날 때까지 지우지 마세요.** 화면과 keepalive 가 둘 중 하나라도 있어야 동작합니다.
+  SUPABASE_PUBLISHABLE_KEY: "",
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzeG5kc2NuZ21rY2lpYmFydW1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1MTg4OTEsImV4cCI6MjEwNDA5NDg5MX0.ifU2XWIfHE8kXFGGcS0q08nTuOCI9VT6c8UeAPEaeaA",   // 예: eyJhbGciOi...
   // 소셜 로그인 버튼. Supabase → Authentication → Providers 에서 켠 것만 적으세요. 예: ["kakao", "google"]
   AUTH_PROVIDERS: ["kakao"],

@@ -40,11 +40,13 @@ jobs:
             globalThis.window = {};
             require("./config.js");
             const c = window.TOOLBOX_CONFIG || {};
-            if (!c.SUPABASE_URL || !c.SUPABASE_ANON_KEY) {
-              console.error("config.js 에 SUPABASE_URL 또는 SUPABASE_ANON_KEY 가 비어 있습니다");
+            // 화면과 같은 규칙으로 고른다: 새 publishable 키가 있으면 그것, 없으면 옛 anon 키
+            const key = c.SUPABASE_PUBLISHABLE_KEY || c.SUPABASE_ANON_KEY;
+            if (!c.SUPABASE_URL || !key) {
+              console.error("config.js 에 SUPABASE_URL, 또는 SUPABASE_PUBLISHABLE_KEY·SUPABASE_ANON_KEY 가 비어 있습니다");
               process.exit(1);
             }
-            console.log(c.SUPABASE_URL.replace(/\/+$/, "") + " " + c.SUPABASE_ANON_KEY);
+            console.log(c.SUPABASE_URL.replace(/\/+$/, "") + " " + key);
           ')
           read -r url key <<<"$cfg"
 
