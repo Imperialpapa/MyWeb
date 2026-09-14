@@ -19,6 +19,9 @@
 | `supabase/seed-4.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
 | `supabase/functions/ai/index.ts` | **서비스 안 AI 에이전트** (Supabase Edge Function). 올릴 때 분류 제안, 운영자용 재분류·분야 구조 제안·자료 채우기. 링크 생존·중복·위험 명령 검증도 여기서. Claude API 키는 여기서만 쓰임 |
 | `supabase/config.toml` | Supabase CLI 설정 (Edge Function 배포용) |
+| `supabase/delete-user.sql` | **탈퇴(계정 삭제) 요청 처리**. SQL Editor 용. 대시보드에서 사용자를 바로 지우면 그 사람의 자료·신고를 더는 못 찾으므로 이 파일로 순서대로 정리한다 |
+| `.github/workflows/keepalive.yml` | Supabase 무료 프로젝트가 멈추지 않게 하루 두 번 DB 에 가벼운 질의를 건다 (GitHub Actions, 비밀 값 불필요) |
+| `.vercelignore` | 사이트 주소로 내보낼 파일의 **허용 목록**. 사이트에서 쓸 새 파일을 만들면 여기에 한 줄 더해야 404 가 안 난다 |
 | `.claude/agents/add-category.md` | Claude Code 서브에이전트. "○○ 분야 추가해줘" 하면 seed 파일과 기본 분야를 만들어 줌 |
 
 `config.js`가 비어 있으면 **미리보기 모드**로 동작합니다. 브라우저에만 저장되고, 운영자 화면을 미리 볼 수 있습니다. `index.html`을 더블클릭해 열어 보세요.
