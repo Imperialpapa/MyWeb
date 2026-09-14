@@ -690,6 +690,48 @@ drop trigger if exists items_strip_from_collections on public.items;
 create trigger items_strip_from_collections
   after delete on public.items for each row execute function public.strip_deleted_from_collections();
 
+-- ---------- 작성자 이름(by)은 서버가 정한다 ----------
+-- by 는 브라우저가 보내는 값이라, 로그인한 누구나 REST 로 남의 이름을 달고 자료·모음·신고를 올릴 수 있었다.
+-- JSON 가져오기도 파일의 by 를 새 id 에 그대로 써서, 지운 글이 원작성자 이름을 달고 되살아날 수 있었다.
+--   새 행: 올린 사람의 프로필 이름으로 덮는다. 운영자가 올리는 자료·모음은 예외다 — 백업을 복원할 때 원래 이름을 지켜야 한다.
+--   고친 행: by 는 **주인 본인이 자기 현재 이름으로** 바꾸는 것만 받는다("예전 자료의 이름도 바꾸기" 가 이 경로다).
+--     나머지는 옛 값을 지킨다. 낡은 탭의 운영자·담당자 저장이 남의 개명을 옛 이름으로 되돌리던 것도 이걸로 막힌다.
+--     오류로 막지 않는 이유: 화면은 고칠 때 들고 있던 by 를 늘 함께 보낸다. 그게 낡았다고 저장을 통째로 실패시키면 본문 수정까지 잃는다.
+--   로그인 맥락이 없으면(SQL Editor, auth.uid() 가 null) 손대지 않는다. delete-user.sql 의 이름 가리기, seed, partners.sql 이 이 경로다.
+-- 주인 컬럼은 to_jsonb 로 읽는다. reports 에는 owner_id 가 없어서 old.owner_id 를 직접 쓰면 실행 중에 오류가 난다.
+-- **`by` 는 SQL 예약어라 식 안에서는 반드시 new."by" 로 따옴표를 친다.** 안 치면 `record "new" has no field "by"` 로
+-- 자료·모음의 **모든 수정이 실패한다**(대입문 new.by := 는 통과해서 insert 만 시험하면 모른다. 실제로 겪었다).
+create or replace function public.enforce_author_name()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_me uuid := auth.uid(); v_name text;
+begin
+  if v_me is null then return new; end if;
+  v_name := coalesce((select name from public.profiles where id = v_me), '');
+  if tg_op = 'INSERT' then
+    if tg_table_name = 'reports' or not public.is_admin() then
+      new."by" := v_name;
+    end if;
+  elsif new."by" is distinct from old."by"
+        and ((to_jsonb(old)->>'owner_id') is distinct from v_me::text or new."by" is distinct from v_name) then
+    new."by" := old."by";
+  end if;
+  return new;
+end $$;
+drop trigger if exists items_author_name on public.items;
+create trigger items_author_name
+  before insert or update on public.items for each row execute function public.enforce_author_name();
+drop trigger if exists collections_author_name on public.collections;
+create trigger collections_author_name
+  before insert or update on public.collections for each row execute function public.enforce_author_name();
+drop trigger if exists reports_author_name on public.reports;
+create trigger reports_author_name
+  before insert on public.reports for each row execute function public.enforce_author_name();
+-- 프로필 이름이 items.by 상한(40자)보다 길면 위 트리거가 넣은 이름 때문에 글쓰기가 items_len 으로 실패한다.
+-- 화면은 24자로 막지만 REST 로는 길게 저장할 수 있으므로 여기서도 막는다.
+-- not valid: 이미 있는 행은 검사하지 않는다. 혹시 긴 이름이 있어도 이 파일 전체가 롤백되지 않게.
+alter table public.profiles drop constraint if exists profiles_name_len;
+alter table public.profiles add  constraint profiles_name_len check (length(name) <= 40) not valid;
+
 -- ---------- 실시간 반영 ----------
 do $$
 begin
