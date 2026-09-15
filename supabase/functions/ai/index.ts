@@ -10,6 +10,7 @@
 // 분야는 이름이 아니라 **id** 로 오간다. 화면은 categoryId 를 보내고, 응답은 {categoryId, category} 를 함께 준다.
 // settings 의 분야에 id 가 하나라도 없으면 자동으로 옛 이름 방식으로 강등한다(idMode). 배포 순서가 어긋나도 죽지 않게.
 // 이 함수는 데이터베이스를 읽기만 한다. 적용(쓰기)은 브라우저가 사용자 권한(RLS)으로 한다.
+// 프롬프트의 "자주 쓰는 태그" 도 서버가 DB 에서 센다 (suggest 는 schema.sql 의 top_tags, organize·expand 는 items 조회). 브라우저가 보낸 목록은 넣지 않는다.
 //
 // 배포:  npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 //        npx supabase functions deploy ai
@@ -450,12 +451,15 @@ function logAuthFail(
 
 // 로그인을 통과한 뒤의 DB 읽기 실패도 한 줄 남긴다. 키 이름을 authFail 과 달리 해 로그인 문제를 찾을 때 섞이지 않게 한다.
 // 없으면 운영자는 "읽지 못했습니다" 문구만 받고 로그는 비어, DB 재시작인지 권한·스키마 문제인지 가를 수 없다.
+// 실패해도 멈추지 않고 그 값 없이 계속한 읽기(지금은 suggest 의 태그 힌트뿐)는 reply 대신 degraded:true 를 싣는다.
+// 이 줄을 찍는 때에는 응답 코드가 아직 정해지지 않았고, reply 를 지어 넣으면 "reply":500 을 찾는 사람이 요청 실패로 오해한다.
 function logReadFail(
   stage: string,
-  f: { reply: number; keySource: string; status?: number; error: { code?: string; message?: string } },
+  f: ({ reply: number } | { degraded: true }) & { keySource: string; status?: number; error: { code?: string; message?: string } },
 ) {
   console.error(JSON.stringify({
-    readFail: stage, reply: f.reply, keySource: f.keySource, status: f.status || 0, code: String(f.error.code || ""), msg: scrub(f.error.message),
+    readFail: stage, ...("degraded" in f ? { degraded: true } : { reply: f.reply }), keySource: f.keySource,
+    status: f.status || 0, code: String(f.error.code || ""), msg: scrub(f.error.message),
   }));
 }
 
@@ -519,7 +523,8 @@ Deno.serve(async (req) => {
   }
   const isAdmin = !!(prof && prof.is_admin);
 
-  let body: { action?: string; item?: Partial<Row>; ids?: string[]; tagsHint?: string[];
+  // tagsHint 는 받지 않는다. 옛 탭이 아직 보내도 읽지 않는다 (아래 suggest 의 태그 힌트 참고)
+  let body: { action?: string; item?: Partial<Row>; ids?: string[];
     category?: string; topic?: string; count?: number; mix?: string; subs?: string[] };
   let rawBody: string;
   try { rawBody = await req.text(); } catch { return fail("요청을 읽지 못했습니다"); }
@@ -594,12 +599,31 @@ Deno.serve(async (req) => {
         tags: cutArr(src.tags, CAP.tags, CAP.tag),
       };
       if (!(it.title || it.url || it.body)) return fail("제목, 주소, 내용 중 하나는 있어야 합니다");
+      // 자주 쓰는 태그는 서버가 저장된 자료에서 센다 (schema.sql 의 top_tags, 이 사용자의 RLS 로).
+      // 예전에는 브라우저가 센 목록(tagsHint)을 받은 그대로 system 에 넣어, 로그인한 누구나 REST 로 직접 불러
+      // 40개×30자까지 자기 글을 system 자리에 넣을 수 있었다. 그래서 body.tagsHint 는 아예 읽지 않는다.
+      // DB 에서 온 태그도 남이 쓴 글이다. top_tags 가 공백·줄바꿈 없는 태그만 세지만 여기서도 한 줄로 눕히고,
+      // 눕힌 뒤 같아진 것은 하나만 남긴다 (순서는 top_tags 순서 그대로).
+      // 힌트가 없어도 분류는 된다. 읽기에 실패해도(schema.sql 을 아직 안 돌려 함수가 없음 = PGRST202, DB 문제)
+      // 가장 많이 쓰는 기능을 멈추지 않고 한 줄 남긴 뒤 "(아직 없음)" 으로 계속한다. 사용량을 깎기 전에 읽는다.
+      let tagRows: unknown = null;
+      try {
+        const { data, error, status } = await sb.rpc("top_tags", { lim: 40 });
+        if (error) logReadFail("suggest-tags", { degraded: true, keySource: call.keySource, status, error });
+        else tagRows = data;
+      } catch (e) {
+        // supabase-js 는 연결 실패도 error 로 돌려주지만, 혹시 던지면 아래 catch 가 분류 제안 전체를 500 으로 만든다
+        logReadFail("suggest-tags", { degraded: true, keySource: call.keySource, error: { message: String((e as Error)?.message || e) } });
+      }
+      const tagHints = [...new Set(
+        (Array.isArray(tagRows) ? tagRows : []).slice(0, 40).map((t) => flat(t, CAP.hint)).filter(Boolean),
+      )];
       const system = `${SITE_RULES(idMode)}
 
 분야 목록:
 ${catsText(cats)}
 
-자주 쓰는 태그: ${cutArr(body.tagsHint, 40, CAP.hint).join(", ") || "(아직 없음)"}
+자주 쓰는 태그: ${tagHints.join(", ") || "(아직 없음)"}
 
 추가 규칙:
 - title: 제목이 비어 있거나 도메인 이름(example.com)뿐이면 한눈에 알아볼 짧은 한국어 제목을 제안한다. 이미 괜찮은 제목이면 그대로 돌려준다.

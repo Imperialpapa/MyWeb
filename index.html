@@ -1036,7 +1036,6 @@ const myReported=()=>new Set(S.reports.filter(r=>r.reporterId===ME.id).map(r=>r.
 /* AI: 운영자용 정리 도구는 공유 저장소 + 운영자일 때만, 분류 제안 버튼은 공유 저장소 + 로그인일 때 */
 const aiOn=()=>AI_ON&&!!store&&store.kind==='db';
 const aiReady=()=>aiOn()&&S.admin;
-const topTagsLocal=(n=40)=>{ const c={}; S.items.forEach(it=>(it.tags||[]).forEach(t=>c[t]=(c[t]||0)+1)); return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n).map(([t])=>t); };
 const catsToText=list=>list.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
 
 /* ---------- 분야 행 편집기 ----------
@@ -1611,7 +1610,8 @@ async function openForm(it){
     if(!(item.title||item.url||item.body)){ msg.textContent='제목, 주소, 내용 중 하나는 먼저 적어 주세요.'; return; }
     aiBtn.disabled=true; msg.textContent='AI 가 살펴보는 중…';
     try{
-      const r=await store.ai('suggest',{item,tagsHint:topTagsLocal()});
+      // 자주 쓰는 태그는 서버가 저장된 자료에서 센다. 여기서 세어 보내던 tagsHint 는 system 프롬프트에 남의 글을 넣는 통로라 걷었다
+      const r=await store.ai('suggest',{item});
       // 서버는 categoryId 와 이름을 함께 준다. id 를 못 받으면 이름으로 찾아 잇는다.
       const rid=r.categoryId||((S.cats.find(c=>c.name===r.category)||{}).id||'');
       if(rid){ if(![...f.category.options].some(o=>o.value===rid)) f.category.add(new Option(r.category||catName(rid),rid)); f.category.value=rid; subOpts(); }

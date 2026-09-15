@@ -23,7 +23,13 @@
        그리고 배포하면 **그 자리에서** 이 파일에 적는다
   2. **Anthropic 키 교체 — 2026-10-07 만료** (아래 항목). 3주 남았고, 만료되면 AI 기능 전체가 멈춘다
   3. **키 교체 4·5단계**: 로컬에서 `config.js` 에 publishable 키를 채워 로그인·추천·AI 까지 확인한다 → 채워서 푸시하면 전환이다. 그 뒤 1~2주 지켜본다
-  4. **`tagsHint` 를 서버가 세게 고치기** ("프롬프트 인젝션" 항목). 로그인한 누구나 system 프롬프트에 자기 글을 넣을 수 있다. 함수만 고치면 된다
+  4. **`tagsHint` 를 서버가 세게 고치기 — 코드 완료·커밋, 운영 반영 대기** (2026-09-15, "프롬프트 인젝션" 항목).
+     함수만으로는 안 됐다. DB 함수 `top_tags` 를 새로 넣는다. 반영은 자동 모드 권한 판정이 "운영 배포" 로 막아 운영자 허락을 기다린다. 순서:
+     1. `supabase/schema.sql` 의 "자주 쓰는 태그" 절(`create or replace function public.top_tags` + `grant`)을 실행. 파일 전체를 돌려도 된다(이 절 말고는 운영과 같다)
+        → `select public.top_tags(5);` 가 태그 배열
+     2. `npx supabase functions deploy ai`
+     3. `git push` (화면이 tagsHint 를 안 보낸다. 함수보다 먼저 나가면 옛 함수가 힌트 없이 돈다 — 멈추지는 않는다)
+     → 로그인한 채 **✦ AI 분류 제안** 한 번. Logs 에 `"readFail":"suggest-tags"` 줄이 없어야 한다(있으면 1을 안 한 것)
   5. **운영자만 할 수 있는 것** (급하지 않다. 처리방침 공개 전까지만 하면 된다)
      - Supabase·Vercel·Anthropic 에 보낼 문의 메일 셋, Console·대시보드 확인, 몇 가지 결정 → "개인정보처리방침 만들기" 아래 목록
      - GitHub Pages 를 끌지 결정 → "운영" 항목
@@ -66,14 +72,17 @@
   아래 확인 쿼리 결과가 전부 기대대로다: `reports_item_fk`·`reports_one_per_person` 있음, `owner_id` UPDATE 권한 `f`,
   작성자 이름 트리거 3개, `daily-privacy-cleanup` 1줄(첫 실행 succeeded). `profiles_name_len` 은 `not valid` 로 붙었고 40자 넘는 이름은 0건.
   "실행 직후 자기 자료 하나를 고쳐 저장" 도 **2026-09-15 에 됐다**(맨 위 항목 1). 아래 내용은 다시 볼 일이 있을 때를 위해 남긴다.
-  **한 번 실행하면 아래 셋이 함께 들어간다.**
+  **한 번 실행하면 아래가 함께 들어간다.**
   1. 신고 표 외래키·유일 제약 (커밋 `92f5feb`). 실행하면 이미 쌓인 고아·중복 신고를 먼저 치운다
   2. 분야 담당자가 자료 주인(owner_id)을 못 바꾸게 컬럼 권한에서 뺌 (2026-09-14)
   3. 작성자 이름(by) 사칭 방지 트리거 셋 + 프로필 이름 40자 상한 (2026-09-14)
   4. 매일 정리 작업 `daily-privacy-cleanup` (pg_cron 확장을 켠다, 2026-09-14). **pg_cron 을 못 켜면 파일 전체가 롤백된다** —
      그때는 대시보드 Database → Extensions 에서 pg_cron 을 켠 뒤 다시 실행
+  5. **(아직 운영 반영 전)** 분류 제안의 자주 쓰는 태그를 서버가 세는 함수 `top_tags` (2026-09-15, "프롬프트 인젝션" 항목). **`functions deploy ai` 보다 먼저** —
+     거꾸로 하면 분류 제안이 태그 힌트 없이 돌고 Logs 에 `"readFail":"suggest-tags"` 줄이 찍힌다. 함수 하나와 grant 뿐이라 이 절만 따로 넣어도 되고 표 잠금이 없다
   실행 뒤 확인:
   ```sql
+  select public.top_tags(5);                                                   -- 태그 배열 (자료가 없으면 {})
   select conname from pg_constraint where conname='reports_item_fk';          -- 1줄
   select indexname from pg_indexes where indexname='reports_one_per_person';  -- 1줄
   select has_column_privilege('authenticated','public.items','owner_id','UPDATE');  -- f
@@ -197,7 +206,8 @@
      - Edge Functions → ai 에서 JWT 검사가 **꺼져** 있는지 (배포가 config.toml 을 따르지만 대시보드 토글로 다시 켜질 수 있다)
      - 문제면 재배포 없이 되돌리기: `npx supabase secrets set --project-ref csxndscngmkciibarumi KEY_SOURCE=anon` → 원인 확인 뒤 `npx supabase secrets unset --project-ref csxndscngmkciibarumi KEY_SOURCE`
      - 로그 줄 모양: 실패 `{"authFail":"user|server|config","stage":"key|prefilter|client|getUser|profile",...}`, 사용량 줄에 `keySource`,
-       로그인 뒤 DB 읽기 실패 `{"readFail":"settings|quota|taxonomy-items|expand-items|expand-dup",...}` (아래 "오류를 버리던 DB 읽기" 참고)
+       로그인 뒤 DB 읽기 실패 `{"readFail":"settings|quota|taxonomy-items|expand-items|expand-dup",...}` (아래 "오류를 버리던 DB 읽기" 참고),
+       실패해도 멈추지 않고 계속한 읽기 `{"readFail":"suggest-tags","degraded":true,...}` — `reply` 가 없다 (2026-09-15, 아래 "프롬프트 인젝션" 참고)
   2. **실시간 스스로 다시 붙기**: 닫히면 채널을 지우고 토큰을 새로 설정한 뒤 다시 구독(세대 번호로 무한 반복 방지)
      → **코드 완료·커밋** (2026-09-14, `index.html`). **푸시함** (2026-09-15, 배포본 `6dbde77`). CLOSED 는 5초 뒤 다시 짓고 되풀이되면 두 배씩 60초까지,
      CHANNEL_ERROR·TIMED_OUT 은 라이브러리 재참여를 60초 기다린 뒤 다시 짓는다. 다시 지을 때 로그아웃 뒤 남은 사용자 JWT 대신 지금 세션 토큰(없으면 키)으로 붙는다.
@@ -605,9 +615,40 @@
 - [ ] **프롬프트 인젝션**: 자료 채우기(expand)의 시스템 프롬프트에 들어가는 남의 글은 `flat()` 으로 한 줄로 눕혔지만,
   organize·suggest 의 **사용자 메시지**는 여전히 원문 그대로다(본문에 줄바꿈이 있어야 분류가 제대로 된다).
   재분류 제안 표가 기본 전체 체크인 것도 그대로. 기본 해제로 바꿀지 검토
-  - **분류 제안(suggest)의 `tagsHint` 는 브라우저가 보낸 값을 그대로 system 프롬프트에 넣는다** (2026-09-14 처리방침 코드 검토에서 발견).
-    로그인한 누구나 REST 로 직접 불러 40개×30자까지 자기 글을 system 자리에 넣을 수 있다(`ai/index.ts` suggest 의 system). user 메시지보다 모델이 더 믿는 자리다.
-    organize 처럼 서버가 items 의 tags 로 직접 세면 막히고, 처리방침 8-5 캐시 문단도 단순해진다. 부르는 쪽이 운영자뿐인 organize 와 달리 누구나 부를 수 있어 우선순위가 더 높다
+  - [x] ~~**분류 제안(suggest)의 `tagsHint` 는 브라우저가 보낸 값을 그대로 system 프롬프트에 넣는다**~~ → **고침** (2026-09-15, 커밋함. **운영 반영 전** — 맨 위 항목 4). 2026-09-14 처리방침 코드 검토에서 발견했다.
+    로그인한 누구나 REST 로 직접 불러 40개×30자까지 자기 글을 system 자리에 넣을 수 있었다(user 메시지보다 모델이 더 믿는 자리).
+    이제 서버가 새 DB 함수 `top_tags(lim)`(`schema.sql`)로 저장된 자료의 태그를 센다. 많이 쓴 순, 같으면 글자 순(`collate "C"`)이라 같은 자료면 system 앞부분(프롬프트 캐시)이 흔들리지 않는다.
+    함수는 `body.tagsHint` 를 아예 읽지 않고, 화면도 보내지 않는다(`topTagsLocal` 삭제). 옛 탭이 보내도 무시하고 정상으로 답한다.
+    DB 에서 온 태그도 남의 글이라 한 줄로 눕히고(각 30자), 눕힌 뒤 겹친 것은 하나만 넣는다.
+    - 검토에서 잡아 고친 것: 처음 판은 태그를 **나온 횟수**로 세고 공백만 걸렀다. 자료 하나에 같은 태그 20개를 넣으면 위로 올랐고,
+      줄바꿈으로 시작하는 태그는 바이트 순 동점에서 늘 앞섰으며, `#`·탭뿐인 태그는 눕히면 빈 글자라 40자리를 헛되이 먹었다.
+      → **태그를 단 자료 수**로 세고, 사이트가 만드는 모양(40자 이하, 공백·제어문자·쉼표 없음, 첫 글자가 `# > * -` 아님)만 센다
+    - **알면서 남긴 것 — 저장된 태그로 들어가는 길.** 로그인한 계정이 자료를 올려 태그를 달면 여전히 힌트 줄에 들어간다.
+      줄바꿈·`##` 절 위조는 안 되고 공백 없는 낱말 30자까지만 보이며, 자료는 공개되고 작성자(owner_id)가 남는다.
+      PGlite 로 잰 값: 자료 75개·태그 60종에서 ASCII 로 시작하는 태그 20개를 단 자료 **1개로 17자리**, 2개로 20자리. 자료 300개면 4개가 든다.
+      동점을 "먼저 쓴 태그" 로 가르는 안은 버렸다. `created_at` 은 글쓴이가 넣는 값이다(가져오기가 날짜를 살리고, RLS 로 넣어도 2000-01-01 이 들어간다).
+      별개로 `items_len` 은 태그 개수(20)만 막고 길이는 안 막아 20만 자 태그도 저장된다 (힌트에는 40자 넘는 태그가 안 들어간다)
+    - **배포 순서: `schema.sql` 의 `top_tags` 절 먼저 → `npx supabase functions deploy ai` → `git push`.**
+      순서가 어긋나 `top_tags` 가 없어도 분류 제안은 멈추지 않는다. 태그 힌트를 "(아직 없음)" 으로 두고 계속하며 Logs 에
+      `{"readFail":"suggest-tags","degraded":true,...,"status":404,"code":"PGRST202"}` 한 줄을 남긴다. **배포 뒤 이 줄이 계속 보이면 스키마를 안 돌린 것이다**
+    - `readFail` 줄에 `degraded` 모양이 새로 생겼다. 실패했지만 요청은 계속했다는 뜻이라 `reply` 가 없다 (나머지 다섯 곳은 그대로 `"reply":500`)
+    - 스키마 반영 확인: `select public.top_tags(5);` → 태그 배열 (자료가 없으면 `{}`). PostgREST 로는 `["docker",…]` 같은 JSON 배열로 와야 한다(가짜 서버로만 시험했다 — 반영 뒤 REST 로 한 번 볼 것)
+    - 시험: 가짜 Supabase·Anthropic 서버 82가지 통과(기존 63 + 새 19). 새 시험 중 13개는 **고치기 전 코드에서 실패하는 것까지** 확인했다.
+      악성 tagsHint 가 Anthropic 요청 어디에도 없음(top_tags 가 실패해 힌트가 빌 때도 대신 쓰지 않음), 태그 순서·눕히기·겹침 제거,
+      404·500·502·연결 끊김에서 200 과 로그 한 줄·사용량 1회·환불 없음, 사용자 토큰으로 사용량 차감보다 먼저 부름,
+      organize·taxonomy·expand 는 고치기 전 함수와 Anthropic 요청이 바이트 단위로 같음. tsc 오류는 고치기 전과 같은 둘(SDK 타입)뿐
+    - DB 시험: **Docker 가 끝내 뜨지 않아 운영과 같은 이미지(`supabase/postgres:17.6.1.166`)로는 못 돌렸다.**
+      대신 PGlite(Postgres 18.3, WASM)에 auth·역할만 흉내 내고 pg_cron 절만 뺀 `schema.sql` 전체를 세 번(빈 DB·재실행·자료 든 채 재실행) 넣어 17가지 통과:
+      많이 쓴 순·자료 수로 세기(한 자료에 같은 태그 20개여도 1)·모양 거르기(줄바꿈·탭·U+3000·`#`·41자 빠짐, `c++`·`.net`·`한글·태그` 남음)·
+      동점 바이트 순(**태그 칸을 ICU `unicode` 정렬로 바꿔도** 그대로. PGlite 기본 정렬이 C 라 이 시험 없이는 `collate "C"` 를 빼도 통과했다)·
+      `lim` 1~100 가두기·anon/authenticated 실행·invoker(부른 사람의 RLS 적용)·`text[]` 반환·빈 표면 `{}`,
+      그리고 이 함수를 `items` 보다 위에 두면 만드는 순간 실패하는 것. 일부러 망가뜨린 셋(`collate "C"` 빼기·`count(*)`·공백만 거르기)은 각각 1·6·5가지가 실패한다.
+      그 대신 **운영 DB(17.6)에서 함수 본문을 읽기 전용 SELECT 로 돌렸다**: 태그 138종 중 걸러지는 것 0, 상위 40개 순서 정상(동점은 ASCII 가 한글보다 앞)
+  - [ ] **재분류(organize)의 "자주 쓰는 태그" 는 저장된 태그를 눕히지도 자르지도 않고 system 에 넣는다** (2026-09-15 검토에서 발견, 이번 변경 밖이라 그대로 둠).
+    `ai/index.ts` organize 가 `topTags(allRows)` 를 그대로 join 한다. expand 는 `flat(t, CAP.tag)` 을 거치고 suggest 는 이제 `top_tags` 를 쓴다.
+    로그인한 누구나 줄바꿈이 든 긴 태그를 저장할 수 있어, 운영자가 재분류를 돌리면 가짜 `## 절` 이 system 에 들어갈 수 있다.
+    고칠 때: `sb.rpc("top_tags", { lim: 40 })` 로 바꾸거나 `flat(t, CAP.hint)` 뒤 겹침 제거. 부르는 쪽이 운영자뿐이라 suggest 보다는 덜 급하다.
+    같은 organize 의 자료 읽기 실패는 아직 `readFail` 로그 없이 500 만 낸다(2026-09-15 배포 전 점검에서 발견). 고칠 때 함께
 - [ ] **AI 정리 3번(자료 채우기)에서 알면서 남긴 것**
   - 위험 명령을 "설명"하는 정상 메모도 `risk=block` 으로 막힌다. 운영자가 새 항목으로 직접 올리면 된다
   - `ai_refund_quota` 는 "지금 날짜" 행을 깎는다. 30~60초짜리 요청이 자정을 넘겨 실패하면 환불이 다음 날로 간다 (드묾)

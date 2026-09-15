@@ -36,9 +36,13 @@
      - supabase/functions/ai/index.ts 의 cache_control 위치(지금은 system 블록 하나, ttl 없음 = 5분)나 action 별 system 에 넣는 내용이 바뀌면 8-5 캐시 문단을 고친다.
        지금 system(캐시 대상)에 들어가는 남의 글: suggest·organize 는 분야 목록·자주 쓰는 태그, expand 는 거기에 그 분야 기존 자료의 종류·제목 60자·호스트,
        전체 호스트 120개, 주제 힌트. taxonomy 는 규칙만(분야 구조·자료 목록은 user 메시지). 작성 중인 자료(suggest)·재분류 자료 30개(organize)는 user 메시지.
-       단 "자주 쓰는 태그" 는 그 자료들의 태그도 센다: organize 는 서버가 items(limit 5000)의 tags 로 세고(재분류 대상 포함),
-       suggest 는 브라우저가 S.items 전체로 세어 tagsHint 로 보낸다(index.html topTagsLocal, 고치는 중인 자료의 저장된 태그 포함).
-       tagsHint 는 서버가 다시 계산하지 않고 받은 그대로(40개×30자) system 에 넣는다. 그래서 8-5 에 "작성 중인 자료는 캐시에 들어가지 않는다" 고 단정하지 말 것.
+       단 "자주 쓰는 태그" 는 저장된 자료들의 태그도 센다: organize 는 서버가 items(limit 5000)의 tags 로 세고(재분류 대상 포함),
+       suggest 는 서버가 DB 함수 top_tags(schema.sql, 부른 사람의 RLS 로 = 공개된 자료 전체)로 세어 상위 40개를 한 줄로 눕혀(각 30자) 넣는다.
+       top_tags 는 공백·제어문자 없는 40자 이하 태그만, 태그를 단 자료 수로 센다.
+       2026-09-15 부터다. 그전에는 브라우저가 센 목록(tagsHint)을 서버가 받은 그대로 넣었고, 이제 브라우저가 보낸 목록은 system 에 들어가지 않는다.
+       작성 중인 자료의 입력(아직 저장하지 않은 태그 칸 포함)은 user 메시지에만 들어간다. 다만 이미 저장된 자료를 고치는 중이면
+       그 자료의 저장된 태그는 다른 자료와 똑같이 세어진다. 그래서 8-5 에 "작성 중인 자료의 태그는 캐시에 들어가지 않는다" 고 단정하지 말 것.
+       top_tags 를 읽지 못하면(스키마 미반영·DB 문제) 태그 없이 "(아직 없음)" 으로 보낸다.
      - output_config.format 의 JSON 스키마는 Anthropic 이 마지막 사용 후 최대 24시간 따로 캐시한다(API and data retention 표 "Structured outputs").
        지금 스키마의 enum 에는 분야 id(이름 모드에서는 분야 이름)만 들어간다. 스키마에 이용자 글을 넣게 되면 8-5 를 고칠 것.
      - ask() 의 사용량 로그(console.log)는 스트림 루프가 끝난 뒤에만 찍힌다. create 나 스트림이 던지면 로그가 없으므로 8-5 에 "호출할 때마다" 라고 쓰지 말 것.

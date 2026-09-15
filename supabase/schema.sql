@@ -423,6 +423,40 @@ end $$;
 revoke all on function public.ai_refund_quota(integer) from public, anon;
 grant execute on function public.ai_refund_quota(integer) to authenticated;
 
+-- ---------- 자주 쓰는 태그 (AI 분류 제안의 힌트) ----------
+-- 분류 제안(suggest)의 system 프롬프트에 넣는 "자주 쓰는 태그" 를 서버가 센다 (2026-09-15).
+-- 예전에는 브라우저가 세어 tagsHint 로 보냈고 Edge Function 이 받은 그대로 system 에 넣었다.
+-- 그래서 로그인한 누구나 REST 로 함수를 직접 불러 40개×30자까지 자기 글을 system 자리(사용자 메시지보다 모델이 더 믿는 자리)에 넣을 수 있었다.
+-- 이제 함수는 tagsHint 를 읽지 않고 이것을 부른다.
+-- 저장된 태그도 로그인한 누구나 REST 로 넣는 글이라 셀 때부터 좁힌다.
+--   * 태그 수가 아니라 **자료 수**로 센다. 한 자료에 같은 태그를 20번 넣어 20표를 받지 못하게 (화면은 저장할 때 겹친 태그를 하나로 줄인다).
+--   * 사이트가 만드는 모양만 센다: 40자 이하, 공백·제어문자·쉼표 없음, 첫 글자가 # > * - 아님 (화면은 쉼표·공백으로 태그를 가른다).
+--     안 그러면 줄바꿈으로 시작하는 태그가 바이트 순 동점에서 늘 앞서고, 함수가 눕히면 빈 글자가 되는 태그(#, 탭)가 40자리를 먹는다.
+--     공백 판정은 DB 로캘마다 달라 유니코드 공백은 직접 적었다.
+--   * 그래도 자료를 올려 태그를 달면 순위에 오른다 (동점이 많은 작은 게시판이면 자료 하나로도). 공개되고 작성자가 남는 글이며,
+--     함수가 한 줄 30자로 눕혀 넣는다 (todo.md "프롬프트 인젝션").
+--     동점을 "먼저 쓴 태그" 로 가르지 않는 것은 created_at 을 글쓴이가 넣을 수 있어서다 (가져오기가 날짜를 살린다).
+-- 순서를 "많이 쓴 순, 같으면 태그 글자 순" 으로 못 박는다. 같은 자료면 매번 같은 목록이 나와야 system 앞부분이 그대로라 프롬프트 캐시가 맞는다.
+-- 글자 순은 collate "C"(바이트 순)다. DB 기본 정렬 규칙은 설치마다 달라 로컬 시험과 운영의 순서가 어긋날 수 있다.
+-- security invoker: 부른 사람의 RLS 로 센다. items 는 누구나 읽으므로(items_select) 새로 드러나는 것이 없어 anon 에게도 연다.
+-- 돌려주는 모양은 text[] 하나다. PostgREST 는 스칼라(배열 포함)를 돌려주는 함수의 결과를 그 JSON 값 그대로 주므로
+-- supabase-js 의 rpc("top_tags", { lim }) 는 data 로 ["docker","python",…] 을 받는다. 자료가 없으면 빈 배열이다 (null 이 아니다).
+-- **language sql 이라 items 표보다 아래에 있어야 한다** (위 "분야 주 관리자" 절의 42703 함정과 같다).
+-- 이 함수가 아직 없어도(schema.sql 을 안 돌리고 함수만 배포) 분류 제안은 멈추지 않는다. 함수가 readFail 한 줄을 남기고 힌트 없이 계속한다.
+create or replace function public.top_tags(lim integer default 40)
+returns text[] language sql stable security invoker set search_path = public as $$
+  select coalesce(array_agg(s.tag order by s.n desc, s.tag collate "C"), '{}')
+    from (select t.tag, count(distinct i.id) as n
+            from public.items i, unnest(i.tags) t(tag)
+           where length(t.tag) <= 40   -- null 은 여기서 빠진다
+             and t.tag ~ '^[^#>*-]'     -- 빈 태그도 여기서 빠진다
+             and t.tag !~ '[,[:space:][:cntrl:]\u0080-\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]'
+           group by t.tag
+           order by count(distinct i.id) desc, t.tag collate "C"
+           limit greatest(1, least(coalesce(lim, 40), 100))) s   -- 1~100 으로 가둔다. 크게 부르면 함수가 한 번에 모든 태그를 셀 수 있다
+$$;
+grant execute on function public.top_tags(integer) to anon, authenticated;
+
 -- ---------- id 형식 제약 (id 가 화면 HTML 속성에 들어가므로 서버에서 막는다) ----------
 -- 이미 운영 중인 DB 라면 먼저 아래로 어긋나는 행이 없는지 확인하세요. 있으면 그 행을 고친 뒤 실행합니다.
 --   select id from public.items where id !~ '^[A-Za-z0-9_-]{1,64}$';
