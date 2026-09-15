@@ -1,17 +1,26 @@
 # 할 일
 
 ## 바로 할 것
-- [ ] **다음 작업 시작점** (2026-09-14 저녁 기준. 다 끝나면 이 항목을 지울 것)
-  오늘 커밋 16개가 **아직 푸시 전**이다. 아래 순서를 지킬 것.
-  1. **배포** — 스키마 → 함수 → 화면 순서다. 뒤집으면 AI 기능이 죽거나 수정 저장이 막힐 수 있다
-     1. SQL Editor 에서 `supabase/schema.sql` 전체를 실행한다
-        → 아래 "`schema.sql` 다시 실행" 의 확인 쿼리를 돌리고, 사이트에서 자기 자료 하나를 고쳐 저장해 본다
-     2. `npx supabase functions deploy ai`
-        → 로그인한 채 **✦ AI 분류 제안** 을 한 번 누르고, Logs 에 `"keySource":"publishable"` 가 찍히는지 본다 (키 교체 1단계의 확인 목록)
-     3. `git push`
-        → ⋯ 더 보기의 `배포본` 이 `git show HEAD:index.html | md5sum` 앞 7자리와 같은지, `/todo.md` 가 404 인지(`.vercelignore`) 본다
-        → Actions 에서 keepalive 를 `Run workflow` 로 한 번 돌려 초록인지 본다
-     4. 사람 눈으로 볼 것: "다음 배포 뒤 눈으로 볼 것", "배포 뒤 눈으로 확인"(실시간 다시 붙기 포함), "링크 공유 배포 뒤 손으로 볼 것"
+- [ ] **다음 작업 시작점** (2026-09-15 기준. 다 끝나면 이 항목을 지울 것)
+  1. **배포 — 끝남** (2026-09-15). 남은 것은 로그인·사람 눈이 필요한 확인뿐이다
+     - **스키마와 함수는 2026-09-14 에 이미 들어가 있었다.** 기록(`a6f7b65`)만 "아직" 이었다.
+       운영 DB 의 public 함수 15개 본문 md5 가 HEAD `schema.sql` 과 같고, pg_cron `daily-privacy-cleanup` 이 09-14 19:07 UTC 에 한 번 돌아 성공(`DELETE 0`)했다.
+       배포된 ai 함수(version 7, 09-14 08:56 UTC)를 임시 폴더로 내려받아 보니 HEAD 와 바이트까지 같았다. 그래서 둘 다 다시 실행하지 않았다 — 바뀌는 것 없이 표 잠금만 잡는다
+     - `git push` (09-15) → 배포본 `6dbde77` = HEAD. `/`·`config.js`·`icon.png` 200, `/todo.md`·`/done.md`·`/supabase/schema.sql`·`/privacy.html`·`/README.md` 404(`.vercelignore` 가 Git 배포에도 먹는다).
+       keepalive 를 손으로 한 번 돌려 두 작업 모두 초록
+     - **새 스키마·함수가 하루 운영에 있었지만 그 사이 자료 쓰기 0건, AI 호출 0건이다. 실제 경로로는 아직 한 번도 안 돌았다.** 그러니 아래 둘은 먼저 할 것
+       1. ~~사이트에서 **자기 자료 하나를 고쳐 저장**~~ → **됨** (2026-09-15 07:20 UTC, 운영자 확인). DB 에서도 봤다: 수정 1건, `by` 가 주인 프로필 이름과 같게 남았고 분야도 그대로.
+          작성자 이름 트리거의 수정 경로가 운영에서 처음 돈 것이다. "예전 자료의 이름도 바꾸기" 는 아직 안 해 봤다(급하지 않다)
+       2. 로그인한 채 **✦ AI 분류 제안** 한 번 → Logs 에 `"keySource":"publishable"` 가 찍히고 `"authFail":"server"` 가 없는지.
+          문제면 재배포 없이 `npx supabase secrets set --project-ref csxndscngmkciibarumi KEY_SOURCE=anon`
+       3. 그다음 "다음 배포 뒤 눈으로 볼 것" 1~4, "배포 뒤 눈으로 확인"(실시간 다시 붙기 포함), "링크 공유 배포 뒤 손으로 볼 것"
+     - **배운 것: 배포하기 전에 기록 말고 운영 상태부터 읽는다.** 이제 터미널에서 읽을 수 있다(CLI 2.117 의 `db query --linked` 는 SQL Editor 와 같은 경로다)
+       ```bash
+       npx supabase db query --linked "select proname, md5(prosrc) from pg_proc where pronamespace='public'::regnamespace order by 1"
+       npx supabase functions download ai --project-ref csxndscngmkciibarumi --workdir "<임시 폴더>"   # 저장소 안에 받으면 소스를 덮는다
+       ```
+       `md5(prosrc)` 는 SQL Editor 에 붙여 넣은 파일의 줄바꿈을 따른다. 작업 폴더(CRLF)에서 복사해 넣었다면 CRLF 본문으로 견줘야 같게 나온다.
+       그리고 배포하면 **그 자리에서** 이 파일에 적는다
   2. **Anthropic 키 교체 — 2026-10-07 만료** (아래 항목). 3주 남았고, 만료되면 AI 기능 전체가 멈춘다
   3. **키 교체 4·5단계**: 로컬에서 `config.js` 에 publishable 키를 채워 로그인·추천·AI 까지 확인한다 → 채워서 푸시하면 전환이다. 그 뒤 1~2주 지켜본다
   4. **`tagsHint` 를 서버가 세게 고치기** ("프롬프트 인젝션" 항목). 로그인한 누구나 system 프롬프트에 자기 글을 넣을 수 있다. 함수만 고치면 된다
@@ -51,8 +60,13 @@
      `git show HEAD:index.html | md5sum` 앞 7자리와 견준다
      → **2026-09-14 확인함.** 배포된 `index.html` 지문 `92f39e5` = HEAD(`92f5feb`). `og:*` 6줄이 실렸고 `icon.png` 가 19,162바이트로 나간다.
        남은 것은 사람 눈이 필요한 1~4번이다
+     → **2026-09-15 푸시 뒤 다시 확인함.** 배포본 `6dbde77` = HEAD(`a6f7b65`). 실시간 스스로 다시 붙기·링크 공유가 이 배포에 실렸다
 
-- [ ] **`supabase/schema.sql` 다시 실행** (SQL Editor). **한 번 실행하면 아래 셋이 함께 들어간다.**
+- [x] **`supabase/schema.sql` 다시 실행 — 2026-09-14 에 반영돼 있었다** (2026-09-15 운영 DB 를 읽어 확인).
+  아래 확인 쿼리 결과가 전부 기대대로다: `reports_item_fk`·`reports_one_per_person` 있음, `owner_id` UPDATE 권한 `f`,
+  작성자 이름 트리거 3개, `daily-privacy-cleanup` 1줄(첫 실행 succeeded). `profiles_name_len` 은 `not valid` 로 붙었고 40자 넘는 이름은 0건.
+  "실행 직후 자기 자료 하나를 고쳐 저장" 도 **2026-09-15 에 됐다**(맨 위 항목 1). 아래 내용은 다시 볼 일이 있을 때를 위해 남긴다.
+  **한 번 실행하면 아래 셋이 함께 들어간다.**
   1. 신고 표 외래키·유일 제약 (커밋 `92f5feb`). 실행하면 이미 쌓인 고아·중복 신고를 먼저 치운다
   2. 분야 담당자가 자료 주인(owner_id)을 못 바꾸게 컬럼 권한에서 뺌 (2026-09-14)
   3. 작성자 이름(by) 사칭 방지 트리거 셋 + 프로필 이름 40자 상한 (2026-09-14)
@@ -177,7 +191,7 @@
   - 익명 방문자의 실시간 연결은 publishable 키로 **최대 24시간**이다. 지금 코드는 채널이 닫히면 알약만 빨개지고 다시 붙지 않는다. 로그아웃 뒤 만료된 사용자 JWT 로 다시 붙는 기존 문제도 같은 곳이다
   **순서 (옛 키는 7단계 전까지 켜 둔다)**
   1. **AI 함수**: publishable 키 우선·anon 대비, `getUser` 오류를 로그인 실패와 서버 문제로 가르기, supabase-js 버전 고정. 배포: `npx supabase functions deploy ai`
-     → **코드 완료·커밋** (2026-09-14). **배포는 아직**. 배포 뒤 확인:
+     → **코드 완료·커밋·배포** (2026-09-14. 배포된 소스가 HEAD 와 같은 것을 09-15 에 내려받아 확인). 로그인한 호출은 아직 0건이라 아래 확인이 남았다:
      - 로그인한 상태에서 **✦ AI 분류 제안** 한 번 → 결과가 나오면 정상 (이 경로는 실제 사용자 토큰이 필요해 자동 시험에서 못 봤다)
      - 대시보드 Edge Functions → ai → Logs 에 `"keySource":"publishable"` 이 찍히는지, `"authFail":"server"` 줄이 없는지
      - Edge Functions → ai 에서 JWT 검사가 **꺼져** 있는지 (배포가 config.toml 을 따르지만 대시보드 토글로 다시 켜질 수 있다)
@@ -185,7 +199,7 @@
      - 로그 줄 모양: 실패 `{"authFail":"user|server|config","stage":"key|prefilter|client|getUser|profile",...}`, 사용량 줄에 `keySource`,
        로그인 뒤 DB 읽기 실패 `{"readFail":"settings|quota|taxonomy-items|expand-items|expand-dup",...}` (아래 "오류를 버리던 DB 읽기" 참고)
   2. **실시간 스스로 다시 붙기**: 닫히면 채널을 지우고 토큰을 새로 설정한 뒤 다시 구독(세대 번호로 무한 반복 방지)
-     → **코드 완료·커밋** (2026-09-14, `index.html`). **푸시 전**. CLOSED 는 5초 뒤 다시 짓고 되풀이되면 두 배씩 60초까지,
+     → **코드 완료·커밋** (2026-09-14, `index.html`). **푸시함** (2026-09-15, 배포본 `6dbde77`). CLOSED 는 5초 뒤 다시 짓고 되풀이되면 두 배씩 60초까지,
      CHANNEL_ERROR·TIMED_OUT 은 라이브러리 재참여를 60초 기다린 뒤 다시 짓는다. 다시 지을 때 로그아웃 뒤 남은 사용자 JWT 대신 지금 세션 토큰(없으면 키)으로 붙는다.
      계획과 다르게 한 것 둘: 기다림은 **1분 넘게 붙어 있다가** 끊겨야 5초로 돌린다(붙자마자 닫히기를 되풀이하면 5초마다 짓게 되므로),
      첫 연결 전에 실패한 것도 다시 붙을 때 메운다(`everLive` → `lost`)
@@ -253,6 +267,8 @@
   - `gautamkrishnar/keepalive-workflow` 는 쓰지 마라. GitHub 가 약관 위반으로 저장소를 막아(2025-04-21) 받을 수 없다
   - 질의가 실패하면(멈춤·키 폐기·주소 변경) 실행이 빨갛게 끝나 GitHub 가 메일을 보낸다
   - **푸시해야 돈다** (예약 실행은 기본 브랜치에 있는 파일만 본다). 푸시 뒤 Actions 탭에서 `Run workflow` 로 한 번 돌려 초록인지 볼 것
+    → **2026-09-15 푸시 뒤 손으로 한 번 돌림: 두 작업(`예약 실행이 꺼지지 않게`·`DB 에 질의`) 모두 초록** (run 34933935884).
+    남은 것: 첫 **예약** 실행이 제 시각에 도는지 한 번 볼 것. 그리고 멈춤 경고 메일이 오는지 계속 지켜본다
 - [ ] **도메인 확보 검토** (연 15,000원 안팎). 지금 `*.vercel.app` 에 묶여 있으면 호스팅을 옮길 때마다
   Supabase Redirect URLs 와 카카오 콘솔 도메인을 다시 설정해야 한다. 도메인을 먼저 붙이면 그 작업이 한 번으로 끝난다
 - [ ] **Vercel 무료는 비상업 전용이다.** 결제·광고·유료 플랜을 붙이는 날 Pro(월 3만원대)로 올리거나
@@ -310,14 +326,16 @@
   Supabase `Site URL`, 카카오 플랫폼 도메인, 그리고 `index.html` 머리의 **`og:url`·`og:image`**.
   뒤의 둘은 절대 주소라 안 고치면 카카오톡 미리보기가 옛 주소를 가리키고 그림이 깨진다
 - [ ] Supabase 무료 티어 한도(용량·요청) 모니터링, 백업은 `⋯ → 파일로 관리 → JSON 내보내기` 로 주기적으로
-- [ ] **사이트 주소로 저장소 파일이 전부 나간다 → `.vercelignore` 로 막음** (2026-09-14, 푸시 뒤 확인 필요).
+- [x] **사이트 주소로 저장소 파일이 전부 나간다 → `.vercelignore` 로 막음** (2026-09-14, **2026-09-15 푸시 뒤 확인함**).
+  `/`·`/config.js`·`/icon.png` 200, `/todo.md`·`/done.md`·`/supabase/schema.sql`·`/privacy.html`·`/README.md` 404. Git 연동 배포에도 먹는다.
   `/todo.md`·`/done.md`·`/supabase/schema.sql`(712행에 운영자 이메일)·함수 소스·`/supabase/config.toml`·`/.claude/agents/…` 가 HTTP 200 이었다.
   저장소가 공개라 새로 드러나는 비밀은 없지만, 보안 약점을 적은 내부 메모를 사이트 주소에서 바로 열 이유는 없다.
-  `.vercelignore` 를 허용 목록 방식으로 둔다(`index.html`·`privacy.html`·`config.js`·`icon.png` 만). **사이트에서 쓸 새 파일을 만들면 여기에 한 줄 더해야 한다.**
+  `.vercelignore` 를 허용 목록 방식으로 둔다(`index.html`·`config.js`·`icon.png` 만. `privacy.html` 은 초안이라 일부러 뺐다 — 공개할 때 `!privacy.html` 을 더한다). **사이트에서 쓸 새 파일을 만들면 여기에 한 줄 더해야 한다.**
   Vercel 문서는 이 파일이 Git 연동 배포에도 적용되는지 명시하지 않는다. **푸시 뒤 반드시 확인**:
   ```bash
-  for p in / config.js icon.png todo.md supabase/schema.sql; do curl -s -o /dev/null -w "%{http_code} $p\n" "https://my-web-imperialpapas-projects.vercel.app/$p"; done
-  # 200 / 200 config.js / 200 icon.png / 404 todo.md / 404 supabase/schema.sql 이어야 한다
+  for p in '' config.js icon.png todo.md supabase/schema.sql; do curl -s -o /dev/null -w "%{http_code} /$p\n" "https://my-web-imperialpapas-projects.vercel.app/$p"; done
+  # 200 / 200 /config.js / 200 /icon.png / 404 /todo.md / 404 /supabase/schema.sql 이어야 한다
+  # 첫 칸을 '/' 로 쓰면 주소가 `//` 가 되어 308 이 나온다. 고장이 아니다
   ```
 - [x] `gh auth setup-git` 실행 완료 (2026-09-14). 이제 푸시할 때 Git Credential Manager 창 대신 gh 로그인을 쓴다
 - [ ] **GitHub Pages 가 켜져 있다 — 끌지 결정할 것** (2026-09-14 발견). `https://imperialpapa.github.io/MyWeb/` 이 HTTP 200 으로
@@ -325,6 +343,9 @@
   예전에 "GitHub Pages 는 약관이 SaaS 를 명문으로 금지" 라고 결론 내 놓고도 켜져 있는 상태다.
   그 주소는 Supabase Redirect URLs·카카오 도메인에 없어 로그인이 안 되는 반쪽짜리 사본이고, 검색에 걸리면 방문자가 그리로 샐 수 있다.
   끄는 곳: 저장소 Settings → Pages → Source 를 `None`. (끄면 그 주소는 바로 404 가 된다. Vercel 주소는 영향 없음)
+  **2026-09-15 푸시로 더 급해졌다.** Vercel 에서 일부러 막은 **초안 `privacy.html`**(【확인 필요】 가 남은 것)과 `todo.md`·`supabase/delete-user.sql` 이
+  `imperialpapa.github.io/MyWeb/…` 에서는 HTTP 200 으로 웹 페이지처럼 열린다(pages-build-deployment 가 `a6f7b65` 로 성공). 저장소가 공개라 새 비밀은 없지만,
+  초안 처리방침이 검색에 걸려 진짜 방침처럼 읽힐 수 있다. 끌지 말지는 운영자 결정
 
 ## 비용 줄이기 (2026-09-09 조사에서 남은 것)
 
