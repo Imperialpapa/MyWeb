@@ -505,6 +505,44 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
 .skinpop button:hover{background:var(--surface2)}
 .skinpop button .mk{width:14px;color:var(--accent);flex:none}
 .skinpop button small{margin-left:auto;color:var(--faint);font-size:11px;font-family:var(--mono)}
+
+/* 파일 공유 링크 — 이 사이트는 파일을 보관하지 않는다는 것을 폼에서 바로 말한다 */
+.filenote{font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-left:3px solid var(--file);border-radius:8px;background:var(--bg);padding:8px 10px}
+.filenote summary{cursor:pointer;color:var(--text);margin-top:6px}
+.filenote ol{margin:6px 0 2px;padding-left:18px}
+.filenote li{margin:3px 0}
+.url-hint:empty{display:none}
+.url-hint.ok{color:var(--good)}
+.url-hint.warn{color:var(--bad)}
+.linkbtn{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline;font-size:inherit}
+.chip.urgent,.badge.urgent{background:var(--bad);color:var(--bg)}
+.badge.urgent{font-family:var(--sans);font-weight:700;box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--bad)}
+.foot a{color:inherit}
+
+/* 운영자 소개 (?about) */
+.about{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:22px 22px 18px}
+.ab-head{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.ab-av{width:72px;height:72px;border-radius:50%;object-fit:cover;flex:none;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:28px;font-weight:600}
+.ab-id{min-width:0;flex:1}
+.ab-id h1{margin:0;font-size:22px;font-weight:650;letter-spacing:-.02em;overflow-wrap:anywhere}
+.ab-tag{margin:4px 0 0;color:var(--muted);overflow-wrap:anywhere}
+.ab-head .sp{display:flex;gap:6px;flex-wrap:wrap}
+.ab-bio{margin:16px 0 0;white-space:pre-wrap;line-height:1.7;max-width:70ch;overflow-wrap:anywhere}
+.ab-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.about h3{margin:22px 0 8px;font-size:12.5px;color:var(--muted);font-weight:600}
+.ab-cols{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.ab-col{text-align:left;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:10px 12px;display:flex;flex-direction:column;gap:4px;color:var(--text);min-width:0}
+.ab-col:hover,.ab-item:hover{background:var(--surface2)}
+.ab-col b{font-weight:600;overflow-wrap:anywhere}
+.ab-col span{color:var(--muted);font-size:12.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ab-col small,.ab-item small{color:var(--faint);font-size:11.5px}
+.ab-recent{display:flex;flex-direction:column;gap:2px}
+.ab-item{display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;padding:6px 8px;color:var(--text);min-width:0}
+.ab-item .kind{margin-top:0}
+.ab-item .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 휴대폰은 사이드바가 본문 위에 쌓인다. 소개 화면에서는 걷어 소개가 첫 화면에 오게 한다 (개인 홈페이지로 들어온 사람) */
+@media(max-width:820px){body.v-about .rail{display:none}}
+@media(max-width:600px){.about{padding:16px}.ab-av{width:56px;height:56px;font-size:22px}.ab-head .sp{width:100%}}
 </style>
 </head>
 <body>
@@ -562,6 +600,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
     </div>
     <div class="list" id="list"></div>
     <div id="review" hidden></div>
+    <div id="about" hidden></div>
   </main>
 </div>
 
@@ -569,6 +608,8 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
   <span>단축키: <span class="mono">/</span> 검색 · <span class="mono">↑↓</span> 이동 · <span class="mono">Enter</span> 열기 · <span class="mono">n</span> 새 항목 · <span class="mono">Esc</span> 닫기</span>
   <span>검색어 예: <span class="mono">type:snippet #docker</span>, <span class="mono">cat:운동</span></span>
   <span id="partners" hidden></span>
+  <span id="aboutFoot" hidden><a href="?about" id="aboutLink">운영자 소개</a></span>
+  <span><a href="#" id="rightsLink">권리 침해 신고</a></span>
 </footer>
 
 <div id="modalRoot"></div>
@@ -589,6 +630,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
      saveCategories(list)     list = [{id, name, subs:[...]}]   (운영자만)
                               id 는 서버가 발급한다. 화면은 받은 것을 그대로 돌려보낼 뿐이고,
                               새로 만드는 분야만 id 를 빈 문자열로 둔다.
+     saveAbout(about)         운영자 소개 (?about). settings 의 'about' 키 (운영자만). subscribe 가 about 으로 돌려준다
      ai(action, payload)      Edge Function 'ai' 호출. suggest / organize / taxonomy
      auth: onAuth(cb), login(email), logout(), setName(name)
    SupabaseStore: 실제 서비스.  LocalStore: 설정이 비어 있을 때 미리보기.
@@ -616,6 +658,21 @@ const normCats=list=>(Array.isArray(list)?list:[]).map(c=>{
   if(c.ownerName) o.ownerName=String(c.ownerName).slice(0,24);
   return o;
 }).filter(c=>c.name);
+/* 운영자 소개 (?about). settings 표의 'about' 키 하나에 통째로 둔다. 읽기 공개·쓰기 운영자 정책이 그대로 걸린다.
+   서버는 내용을 검사하지 않으므로(운영자만 쓴다) 읽을 때와 저장할 때 둘 다 여기서 모양과 길이를 맞춘다.
+   이름이 없으면 소개가 없는 것으로 본다.
+     owner  최근 올린 자료를 보여 줄 계정. 처음 저장한 운영자로 정하고 이후 편집에서는 바꾸지 않는다 */
+const ABOUT_MAX={links:8,cols:6};
+const normAbout=v=>{
+  if(!v||typeof v!=='object') return null;
+  const s=(x,n)=>String(x??'').trim().slice(0,n);
+  const name=s(v.name,40); if(!name) return null;
+  const links=(Array.isArray(v.links)?v.links:[]).filter(l=>l&&typeof l==='object')
+    .map(l=>({label:s(l.label,30),url:s(l.url,500)})).filter(l=>l.url).slice(0,ABOUT_MAX.links);
+  const cols=[...new Set((Array.isArray(v.cols)?v.cols:[]).map(String).filter(okId))].slice(0,ABOUT_MAX.cols);
+  return {v:1,name,tagline:s(v.tagline,80),bio:String(v.bio??'').replace(/\s+$/,'').slice(0,2000),photo:s(v.photo,500),
+    links,cols,recent:v.recent!==false,owner:s(v.owner,64)};
+};
 /* 미리보기(LocalStore)에는 DB 트리거가 없다. 아래 둘이 그 자리를 대신한다.
    실제 서비스에서는 서버가 같은 일을 하므로 화면 코드는 양쪽에서 똑같이 동작한다. */
 const newCatId=()=>'c'+Math.random().toString(36).slice(2,10);
@@ -631,8 +688,8 @@ const syncItemCats=(items,cats)=>{ const byId={},byName={};
 const LS={get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v) }catch(e){ return d } },set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} }};
 
 function LocalStore(){
-  const K={items:'toolbox.items',cats:'toolbox.cats',cols:'toolbox.cols',reports:'toolbox.reports',votes:'toolbox.votes'};
-  const D={items:LS.get(K.items,null),cats:withCatIds(LS.get(K.cats,DEFAULT_CATS)),cols:LS.get(K.cols,[]),reports:LS.get(K.reports,[]),votes:LS.get(K.votes,[])};
+  const K={items:'toolbox.items',cats:'toolbox.cats',cols:'toolbox.cols',reports:'toolbox.reports',votes:'toolbox.votes',about:'toolbox.about'};
+  const D={items:LS.get(K.items,null),cats:withCatIds(LS.get(K.cats,DEFAULT_CATS)),cols:LS.get(K.cols,[]),reports:LS.get(K.reports,[]),votes:LS.get(K.votes,[]),about:normAbout(LS.get(K.about,null))};
   if(!D.items){ D.items=EXAMPLES.map(x=>({...x,example:true})); LS.set(K.items,D.items); }
   if(!D.cats.length) D.cats=withCatIds(DEFAULT_CATS);
   // 옛 미리보기 자료에는 categoryId 가 없다. 이름으로 한 번 이어 준다.
@@ -641,7 +698,7 @@ function LocalStore(){
   const subs=[]; let authCb=null;
   // 미리보기는 늘 동기로 다 읽혀 있다. 내보낼 때마다 새로 읽은 것으로 친다 (followLink 참고)
   let reads=0;
-  const emit=()=>{ reads++; subs.forEach(cb=>cb({items:D.items.slice(),cats:D.cats.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.votes.slice(),readItems:reads,readCols:reads,colsAt:performance.now()})); };
+  const emit=()=>{ reads++; subs.forEach(cb=>cb({items:D.items.slice(),cats:D.cats.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.votes.slice(),about:D.about,readItems:reads,readCols:reads,readAbout:reads,colsAt:performance.now()})); };
   const up=(arr,it)=>{ const i=arr.findIndex(x=>x.id===it.id); if(i>=0)arr[i]=it; else arr.push(it); };
   return {
     kind:'local',
@@ -660,6 +717,7 @@ function LocalStore(){
     async removeReports(ids){ D.reports=D.reports.filter(x=>!ids.includes(x.id)); LS.set(K.reports,D.reports); emit() },
     async vote(id){ if(D.votes.includes(id)) return 'dup'; D.votes.push(id); LS.set(K.votes,D.votes); const i=D.items.findIndex(x=>x.id===id); if(i>=0) D.items[i].votes=(D.items[i].votes||0)+1; LS.set(K.items,D.items); emit(); return 'added' },
     async saveCategories(list){ D.cats=withCatIds(list); syncItemCats(D.items,D.cats); LS.set(K.cats,D.cats); LS.set(K.items,D.items); emit(); return D.cats.slice() },
+    async saveAbout(a){ D.about=normAbout(a); LS.set(K.about,D.about); emit(); },
     async people(){ return me.name?[{id:me.id,name:me.name}]:[] },
     async markChecked(ids){ const at=new Date().toISOString(); (ids||[]).forEach(id=>{ const it=D.items.find(x=>x.id===id); if(it) it.checkedAt=at; }); LS.set(K.items,D.items); emit(); return (ids||[]).length },
     async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
@@ -671,7 +729,8 @@ function SupabaseStore(){
   // readItems·readCols: 제대로 읽어 반영한 횟수. 0 이면 아직 한 번도 못 읽은 것이다 —
   // 그때의 빈 목록을 "없는 자료" 로 읽으면 멀쩡한 링크를 오진한다 (followLink 참고)
   // colsAt: 반영한 모음 조회를 **쏜** 시각. 그 뒤에 만든 모음은 그 조회에 없다
-  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[],catsRaw:null,readItems:0,readCols:0,colsAt:0};
+  // readAbout: 소개(settings.about)를 제대로 읽은 횟수. 0 이면 "소개가 없다" 와 "아직 모른다" 를 가르지 못한다
+  const D={items:[],cats:normCats(DEFAULT_CATS),cols:[],reports:[],myVotes:[],catsRaw:null,about:null,aboutErr:'',readItems:0,readCols:0,readAbout:0,colsAt:0};
   const me={id:null,name:'',email:'',admin:false};
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({...D,items:D.items.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.myVotes.slice()}));
@@ -711,11 +770,16 @@ function SupabaseStore(){
     // 실패를 남겨 둔다. 안 남기면 모음 링크는 "불러오는 중" 으로 끝없이 기다리고 초록 알약만 보인다
     if(t==='collections'){ const at=now(), {data,error}=await sb.from('collections').select('*'); if(error){ COL_ERR=error.message||'모음을 불러오지 못했습니다'; ok=false; } else if(take()){ COL_ERR=''; D.cols=(data||[]).map(fromCol); D.readCols++; D.colsAt=at; } }
     if(t==='reports'){ if(!me.id){ D.reports=[]; } else { const {data,error}=await sb.from('reports').select('*'); if(error) ok=false; else if(take()) D.reports=(data||[]).map(fromRep); } }
-    if(t==='settings'){ const {data,error}=await sb.from('settings').select('value').eq('key','categories').maybeSingle();
+    // 분야와 운영자 소개를 한 번에 읽는다. 둘 다 settings 의 키 하나씩이고, 실시간도 표 단위('settings')로 온다
+    if(t==='settings'){ const {data,error}=await sb.from('settings').select('key,value').in('key',['categories','about']);
       // list 말고도 들어 있는 값(버전 표시 등)은 그대로 들고 있다가 저장할 때 돌려준다
-      if(error) ok=false; else if(take()){
-        if(data&&data.value&&typeof data.value==='object') D.catsRaw=data.value;
-        const n=normCats(data&&data.value&&data.value.list); if(n.length) D.cats=n; } }
+      // 소개 화면은 "아직 못 읽음" 과 "못 읽었다" 를 갈라 보여 준다. 안 남기면 실패해도 "불러오는 중" 으로 끝없이 기다린다
+      if(error){ ok=false; D.aboutErr=error.message||'소개를 불러오지 못했습니다'; } else if(take()){
+        D.aboutErr='';
+        const row=k=>(data||[]).find(r=>r.key===k), cr=row('categories'), ar=row('about');
+        if(cr&&cr.value&&typeof cr.value==='object') D.catsRaw=cr.value;
+        const n=normCats(cr&&cr.value&&cr.value.list); if(n.length) D.cats=n;
+        D.about=ar?normAbout(ar.value):null; D.readAbout++; } }
     if(t==='votes'){ if(!me.id){ D.myVotes=[]; } else { const {data,error}=await sb.from('votes').select('item_id'); if(error) ok=false; else if(take()) D.myVotes=(data||[]).map(r=>r.item_id); } }
     emit();
     return ok;
@@ -939,6 +1003,10 @@ function SupabaseStore(){
     async saveCategories(list){ const {error}=await sb.from('settings').upsert({key:'categories',value:{...(D.catsRaw||{v:2}),list:normCats(list)},updated_at:new Date().toISOString()}); if(error) fail(error);
       // 미루지 않고 바로 다시 읽는다. 새 분야의 id 는 서버가 발급하므로 부른 쪽이 그것을 알아야 한다.
       await load('settings'); return D.cats.slice(); },
+    // 운영자 소개 저장. 정책(settings_write)이 운영자만 통과시킨다. settings 의 트리거 둘은 key 가 categories 가 아니면 그냥 지나간다
+    async saveAbout(a){ const v=normAbout(a); if(!v) throw new Error('이름을 입력해 주세요');   // value 는 not null 이다
+      const {error}=await sb.from('settings').upsert({key:'about',value:v,updated_at:new Date().toISOString()}); if(error) fail(error);
+      await load('settings'); },
     // 주 관리자로 지정할 사람 목록. 운영자만 부를 수 있다 (profiles 정책이 운영자에게만 전체 조회를 허용).
     // 닉네임만 돌려준다. 이메일 등 계정 정보는 화면에 올리지 않는다.
     async people(){
@@ -988,9 +1056,14 @@ const EXAMPLES=[
 /* ================================================================
    상태 & 유틸
    ================================================================ */
-const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'자료'}};
-const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'부적절한 내용',dup:'중복'};
-const S={items:[],cats:[],cols:[],reports:[],myVotes:[],q:'',type:'all',catId:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCatIds:[]};
+// file 의 이름은 '파일' 이다. 예전 이름 '자료' 는 사이트 전체에서 "항목" 이라는 뜻으로도 써서 둘이 구분되지 않았다.
+// 이 사이트는 파일을 보관하지 않는다 — file 항목도 바깥 클라우드의 공유 링크를 적어 두는 것이다 (openForm 의 안내)
+const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'파일'}};
+// reports.reason 에는 제약이 없어 사유를 더해도 DB 는 그대로다. 뒤의 셋은 권리 침해 신고 (openRights)
+const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'부적절한 내용',dup:'중복',copyright:'저작권 침해',privacy:'사생활 침해·명예훼손',illegal:'불법촬영물 등'};
+// 이 사유가 하나라도 붙은 자료는 검토함 맨 위로 올리고 '긴급' 으로 표시한다. 알게 되면 지체 없이 지워야 한다 (전기통신사업법 22조의5)
+const URGENT=new Set(['illegal']);
+const S={items:[],cats:[],cols:[],reports:[],myVotes:[],about:null,aboutRead:0,q:'',type:'all',catId:'all',sub:null,tag:null,col:null,mine:false,sort:'recent',sel:null,cursor:-1,view:'list',admin:false,openCatIds:[]};
 const ME={id:null,name:'',email:''};
 let store=null;
 /* AI 가 제안한 자료를 잠시 들고 있는다. 한 번 받는 데 하루 사용량 15회분이 드는데
@@ -1010,6 +1083,60 @@ const safeUrl=u=>{ const s=String(u||'').trim(); return /^(https?:|mailto:)/i.te
 /* id 형식: 화면 속성·DB 키로 쓰이므로 영문·숫자·_-만 허용 */
 const okId=v=>/^[A-Za-z0-9_-]{1,64}$/.test(String(v||''));
 const host=u=>{ try{ return new URL(u).hostname.replace(/^www\./,'') }catch(e){ return '' } };
+/* ---------- 파일 공유 링크 ----------
+   이 사이트는 파일을 보관하지 않는다. 파일 항목은 바깥 클라우드의 공유 링크를 적는다.
+   남이 열 수 있는 링크인지는 브라우저가 미리 알 수 없다 — 다른 사이트의 응답은 읽을 수 없다(교차 출처).
+   그래서 링크 **모양**만 본다: 어느 서비스인지, 흔히 잘못 붙이는 주소인지. */
+// 내 컴퓨터 안의 경로. 붙여 넣어도 다른 사람에게는 아무 의미가 없다
+const localPath=s=>/^(file:|[a-z]:[\\/]|\\\\|~\/|\/(Users|home)\/)/i.test(String(s||'').trim());
+// 스킴 없이 붙여 넣은 주소('drive.google.com/…')에 https:// 를 붙인다. 점이 있고 빈칸이 없을 때만.
+// 이미 스킴이 있는 것(mailto: 포함)과 내 컴퓨터 경로는 손대지 않는다 — 검사(urlProblem)가 이유를 말해 준다
+function fixUrl(v){
+  const s=String(v||'').trim();
+  if(!s||localPath(s)||/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+  if(s.startsWith('//')) return 'https:'+s;
+  if(/^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/.test(s)) return 'mailto:'+s;   // 메일 주소만 적은 것. https:// 를 붙이면 엉뚱한 사이트가 된다
+  return /^[^\s/.]+(\.[^\s/.]+)+(\/|\?|#|$)/.test(s)?'https://'+s:s;
+}
+/* 어느 클라우드의 링크인가. {n: 표시 이름, fmt?: 형식 칸에 넣을 말, note?: 덧붙일 주의, list?: 목록 화면 주소라 남이 못 연다}
+   모르는 주소는 null. 목록 화면 판정은 파일 항목만 저장을 막는다(openForm) — 링크 항목이면 그 서비스 자체를 가리킬 수도 있다 */
+function cloudOf(u){
+  let x; try{ x=new URL(u) }catch(e){ return null }
+  if(!/^https?:$/.test(x.protocol)) return null;
+  const h=x.hostname.replace(/^www\./,'').toLowerCase(), p=x.pathname;
+  if(h==='drive.google.com'){
+    if(/\/folders\//.test(p)) return {n:'구글 드라이브 폴더'};
+    if(/^\/drive(\/|$)/.test(p)) return {n:'구글 드라이브',list:'구글 드라이브의 목록 화면 주소입니다. 파일을 골라 [공유 → 링크 복사] 로 받은 주소를 넣어 주세요.'};
+    return {n:'구글 드라이브'};
+  }
+  if(h==='docs.google.com'){
+    const k=(p.match(/^\/(document|spreadsheets|presentation|forms)\//)||[])[1];
+    return {n:{document:'구글 문서',spreadsheets:'구글 시트',presentation:'구글 슬라이드',forms:'구글 설문지'}[k]||'구글 문서',fmt:{document:'문서',spreadsheets:'시트',presentation:'슬라이드'}[k]||''};
+  }
+  if(h==='1drv.ms'||h==='onedrive.live.com') return {n:'원드라이브'};
+  if(/(^|\.)sharepoint\.com$/.test(h)) return {n:'원드라이브(회사·학교)',note:'회사·학교 계정의 링크는 조직 밖 사람에게 열리지 않을 수 있습니다'};
+  if(h==='dropbox.com'||h==='dl.dropboxusercontent.com'){
+    if(/^\/home(\/|$)/.test(p)) return {n:'드롭박스',list:'드롭박스의 목록 화면 주소입니다. 파일의 [공유 → 링크 복사] 로 받은 주소를 넣어 주세요.'};
+    return {n:'드롭박스'};
+  }
+  if(/(^|\.)mybox\.naver\.com$/.test(h)) return {n:'네이버 MYBOX'};
+  return null;
+}
+// 주소 끝의 확장자 (…/보고서.pdf → pdf). 드롭박스 링크처럼 파일 이름이 주소에 있을 때만 나온다
+const extOf=u=>{ try{ const m=decodeURIComponent(new URL(u).pathname).match(/\.([a-z0-9]{2,5})$/i); return m?m[1].toLowerCase():''; }catch(e){ return '' } };
+// 목록·검토함에 붙이는 출처 이름. 아는 클라우드면 그 이름, 아니면 도메인
+const srcName=u=>{ const c=cloudOf(u); return c?c.n:host(u) };
+// 저장해도 되는 주소인가. 문제가 있으면 사용자에게 보일 문장을 돌려준다 (링크·파일 항목)
+function urlProblem(u,type){
+  if(!u) return type==='file'?'파일 공유 링크를 넣어 주세요. 이 사이트는 파일을 보관하지 않아서, 링크가 없으면 아무도 파일을 열 수 없습니다.':'주소를 넣어 주세요.';
+  if(localPath(u)) return '내 컴퓨터 안의 경로는 다른 사람이 열 수 없습니다. 구글 드라이브 같은 곳에 올린 뒤 공유 링크를 넣어 주세요.';
+  if(!safeUrl(u)||!(/^mailto:/i.test(u)||host(u))) return '주소는 https:// 로 시작하는 웹 주소여야 합니다.';
+  // 파일은 웹 링크만. 메일 주소를 넣으면 fixUrl 이 mailto: 로 바꿔 '파일 열기' 가 메일 앱을 열었다
+  // (구글 드라이브 [공유] 창에는 메일 주소 칸이 있어 거기 적은 주소를 붙여 넣기 쉽다)
+  if(type==='file'&&/^mailto:/i.test(u)) return '메일 주소가 아니라 파일의 공유 링크(https://…)를 넣어 주세요.';
+  const c=cloudOf(u); if(type==='file'&&c&&c.list) return c.list;
+  return '';
+}
 const rel=iso=>{ const d=(Date.now()-new Date(iso).getTime())/1000; if(isNaN(d))return ''; if(d<3600)return Math.max(1,Math.round(d/60))+'분 전'; if(d<86400)return Math.round(d/3600)+'시간 전'; if(d<86400*30)return Math.round(d/86400)+'일 전'; return new Date(iso).toLocaleDateString('ko-KR',{year:'2-digit',month:'numeric',day:'numeric'}) };
 let toastT; function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2800); }
 const loggedIn=()=>!!ME.id;
@@ -1202,10 +1329,14 @@ function render(){
   // 목록에 **없는** 모음으로 옮긴 시각 (followLink 의 삭제 판정). 이미 있는 모음을 누른 것까지 옮기면
   // 그 전에 쏜 조회가 "그 모음은 지워졌다" 고 알려 와도 판정을 건너뛰어, 조용히 전체 목록으로 넓어진다
   if(S.col!==colR){ colR=S.col; if(S.col&&!curCol()) colAt=performance.now(); }
-  renderMe(); renderRail(); renderPartners(); renderReviewBtn();
-  const inReview=S.view==='review';
-  $('#list').hidden=inReview; $('#review').hidden=!inReview; $('#colHead').hidden=inReview; document.querySelector('.bar').hidden=inReview;
+  renderMe(); renderRail(); renderPartners(); renderReviewBtn(); renderAboutFoot();
+  const inReview=S.view==='review', inAbout=S.view==='about', aside=inReview||inAbout;
+  $('#list').hidden=aside; $('#review').hidden=!inReview; $('#about').hidden=!inAbout; $('#colHead').hidden=aside; document.querySelector('.bar').hidden=aside;
+  // 소개 화면이면 탭 제목에 그 이름을 앞세운다. 공유받은 사람의 탭·방문 기록에서 알아보게
+  document.body.classList.toggle('v-about',inAbout);
+  const site=CFG.SITE_NAME||'빠른 연결'; document.title=inAbout&&S.about?S.about.name+' · '+site:site;
   if(inReview){ renderReview(); return; }
+  if(inAbout){ renderAbout(); return; }
   const list=filtered(); renderColHead();
   $('#count').innerHTML=`<b>${list.length}</b>개 · 전체 ${S.items.length}개`;
   const el=$('#list');
@@ -1235,7 +1366,7 @@ function row(it,i){
   return `<div class="${cls}" data-id="${esc(it.id)}" data-i="${i}">
     <span class="kind ${it.type}">${t.k}</span>
     <div class="row-main">
-      <div class="row-title">${hl(it.title||'(제목 없음)')}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}${it.lang?`<span class="host">${esc(it.lang)}</span>`:''}</div>
+      <div class="row-title">${hl(it.title||'(제목 없음)')}${it.url?`<span class="host">${esc(srcName(it.url))}</span>`:''}${it.lang?`<span class="host">${esc(it.lang)}</span>`:''}</div>
       ${sub?`<div class="row-sub">${hl(sub)}</div>`:''}
       <div class="row-meta">${catOfItem(it)?`<span class="chip cat">${esc(catOfItem(it))}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
     </div>
@@ -1251,12 +1382,14 @@ function detail(it){
   if(it.type==='snippet') body=`<pre>${esc(it.body||'')}</pre>`;
   else if(it.body) body=`<div class="body">${esc(it.body)}</div>`;
   const su=safeUrl(it.url);
-  const url=it.url?`<div class="url" style="margin-top:${body?10:0}px">${su?`<a href="${esc(su)}" target="_blank" rel="noopener">${esc(it.url)}</a>`:`${esc(it.url)} <span class="chip warn">열 수 없는 주소</span>`}</div>`:'';
   const own=canEdit(it); const rep=myReported().has(it.id);
+  // 링크 없이 저장된 옛 파일 항목. 열 길이 없다는 것을 말해 준다 (지금은 파일도 링크를 받아야 저장된다)
+  const url=it.url?`<div class="url" style="margin-top:${body?10:0}px">${su?`<a href="${esc(su)}" target="_blank" rel="noopener">${esc(it.url)}</a>`:`${esc(it.url)} <span class="chip warn">열 수 없는 주소</span>`}</div>`
+    :it.type==='file'?`<div class="hint" style="margin-top:${body?10:0}px">이 파일에는 공유 링크가 없어 열 수 없습니다.${own?' 수정에서 링크를 넣어 주세요.':''}</div>`:'';
   return `<div class="detail" data-stop>
     ${body}${url}
     <div class="actions">
-      ${su?`<a class="btn small" href="${esc(su)}" target="_blank" rel="noopener">열기 ↗</a>`:''}
+      ${su?`<a class="btn small" href="${esc(su)}" target="_blank" rel="noopener">${it.type==='file'?'파일 열기':'열기'} ↗</a>`:''}
       ${it.type==='snippet'?`<button class="btn small" data-copy="${esc(it.id)}">코드 복사</button>`:''}
       ${it.url?`<button class="btn small" data-copyurl="${esc(it.id)}" title="자료가 가리키는 바깥 주소를 복사합니다">원본 주소 복사</button>`:''}
       ${linkOn()?`<button class="btn small" data-share="${esc(it.id)}" title="이 자료로 바로 오는 빠른 연결 주소를 복사합니다">링크 복사</button>`:''}
@@ -1326,16 +1459,23 @@ function renderColHead(){
   el.innerHTML=`<div class="colhead"><div><div class="crumb">모음 · ${esc(c.by||'')} · ${rel(c.createdAt)}</div><h2>▤ ${esc(c.title)}</h2>${c.desc?`<p>${esc(c.desc)}</p>`:''}</div>
     <div class="sp">${linkOn()?`<button class="btn small ghost" data-colshare="${esc(c.id)}" title="이 모음으로 바로 오는 빠른 연결 주소를 복사합니다">링크 복사</button>`:''}${own?`<button class="btn small" data-coledit="${esc(c.id)}">수정</button><button class="btn small ghost danger" data-coldel="${esc(c.id)}">삭제</button>`:''}<button class="btn small ghost" data-colclose="1">닫기</button></div></div>`;
 }
-function renderReviewBtn(){ $('#reviewBtn').hidden=!isMod(); $('#reviewCnt').textContent=S.reports.length; }
+const urgentRep=rs=>rs.some(r=>URGENT.has(r.reason));
+// 긴급 신고가 있으면 숫자 대신 '긴급 N' 으로 쓴다. 색만 바꾸면 기본 배지와 같은 빨강이라 구분되지 않았다
+function renderReviewBtn(){
+  const b=$('#reviewBtn'), c=$('#reviewCnt'), n=S.reports.length, u=S.reports.filter(r=>URGENT.has(r.reason)).length;
+  b.hidden=!isMod(); c.textContent=u?'긴급 '+u:n; c.classList.toggle('urgent',!!u);
+  const t=u?`신고 검토함 · 긴급 ${u}건 (전체 ${n}건)`:`신고 검토함 · ${n}건`; b.title=t; b.setAttribute('aria-label',t);
+}
 function renderReview(){
   const g={}; S.reports.forEach(r=>{ (g[r.itemId]=g[r.itemId]||[]).push(r) });
-  const ids=Object.keys(g).sort((a,b)=>g[b].length-g[a].length);
+  // 긴급 사유(불법촬영물 등)가 붙은 자료가 먼저, 그다음 신고가 많은 순
+  const ids=Object.keys(g).sort((a,b)=>(urgentRep(g[b])-urgentRep(g[a]))||(g[b].length-g[a].length));
   const el=$('#review');
   if(!ids.length){ el.innerHTML=`<div class="rv"><div class="empty"><b>검토할 신고가 없습니다</b>신고가 들어오면 여기에 모입니다.</div></div><p><button class="btn small ghost" data-review-close="1">목록으로</button></p>`; return; }
   el.innerHTML=`<div class="bar"><div class="status"><b>${ids.length}</b>개 항목에 신고 ${S.reports.length}건</div><button class="btn small ghost" data-review-close="1">목록으로</button></div><div class="rv">`+ids.map(id=>{
     const it=S.items.find(x=>x.id===id); const rs=g[id];
-    return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(host(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(catOfItem(it))}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
-      <ul>${rs.map(r=>`<li>${esc(REASONS[r.reason]||r.reason)}${r.note?' — '+esc(r.note):''} <span class="hint">(${esc(r.by||'익명')}, ${rel(r.createdAt)})</span></li>`).join('')}</ul></div>
+    return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(srcName(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(catOfItem(it))}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
+      <ul>${rs.map(r=>`<li>${URGENT.has(r.reason)?'<span class="chip urgent">긴급</span> ':''}${esc(REASONS[r.reason]||r.reason)}${r.note?' — '+esc(r.note):''} <span class="hint">(${esc(r.by||'익명')}, ${rel(r.createdAt)})</span></li>`).join('')}</ul></div>
       <div class="acts">${it?`<button class="btn small" data-open="${esc(id)}">보기</button><button class="btn small danger" data-rvdel="${esc(id)}">항목 삭제</button>`:''}<button class="btn small ghost" data-rvclear="${esc(id)}">신고 닫기</button></div></div>`;
   }).join('')+'</div>';
 }
@@ -1576,9 +1716,17 @@ async function openForm(it){
   const d=it||{type:'link',title:'',url:'',body:'',lang:'',categoryId:preCat,category:catName(preCat),sub:S.sub||'',tags:[]};
   modal(`${mh(edit?'항목 수정':'새 항목')}<form id="form" autocomplete="off"><div class="modal-b">
       <div class="types" id="types">${Object.entries(TYPES).map(([k,v])=>`<button type="button" data-t="${k}" class="${d.type===k?'on':''}"><span class="k" style="color:var(--${k==='snippet'?'code':k})">${v.k}</span><small>${v.n}</small></button>`).join('')}</div>
-      <label class="fld" id="fUrl">주소 (URL)<input name="url" type="url" placeholder="https://" value="${esc(d.url)}"></label>
+      <label class="fld" id="fUrl"><span id="urlLabel">주소 (URL)</span><input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://" value="${esc(d.url)}" aria-describedby="urlHint err"></label>
+      <div class="hint url-hint" id="urlHint" aria-live="polite"></div>
+      <div class="filenote" id="fFile" hidden>이 사이트는 파일을 <b>보관하지 않습니다.</b> 구글 드라이브 같은 곳에 파일을 올린 뒤, <b>누구나 열 수 있게 공유한 링크</b>를 위 칸에 넣어 주세요.
+        <details><summary>공유 링크 받는 법</summary><ol>
+          <li><b>구글 드라이브</b>: 파일에서 [공유] → '일반 액세스' 를 <b>링크가 있는 모든 사용자</b>로 → [링크 복사]</li>
+          <li><b>원드라이브</b>: 파일에서 [공유] → 링크 설정을 <b>누구나</b>(링크가 있는 모든 사용자)로 → [링크 복사]</li>
+          <li><b>드롭박스</b>: 파일에서 [공유] → 접근 범위가 <b>링크가 있는 모든 사용자</b>인지 보고 → [링크 복사]</li>
+          <li><b>네이버 MYBOX</b>: 파일을 오른쪽 클릭 → [링크 공유] → 만들어진 링크 복사</li>
+        </ol>확인하는 법: 링크를 브라우저의 <b>시크릿 창</b>(로그인하지 않은 창)에 붙여 넣어 보세요. 거기서 열리면 다른 사람도 열 수 있습니다.</details></div>
       <label class="fld">제목<input name="title" required placeholder="한눈에 알아볼 이름" value="${esc(d.title)}"></label>
-      <label class="fld" id="fLang">언어 / 형식<input name="lang" placeholder="bash, python, json, pdf ..." value="${esc(d.lang||'')}"></label>
+      <label class="fld" id="fLang"><span id="langLabel">언어 / 형식</span><input name="lang" placeholder="bash, python, json, pdf ..." value="${esc(d.lang||'')}"></label>
       <label class="fld" id="fBody"><span id="bodyLabel">설명</span><textarea name="body">${esc(d.body)}</textarea></label>
       <div class="two">
         <label class="fld">분야<select name="category">${!d.categoryId?`<option value="">분야 없음${d.category?' (원래: '+esc(d.category)+')':''}</option>`:''}${S.cats.map(c=>`<option value="${esc(c.id)}" ${c.id===d.categoryId?'selected':''}>${esc(c.name)}</option>`).join('')}${d.categoryId&&!S.cats.some(c=>c.id===d.categoryId)?`<option value="${esc(d.categoryId)}" selected>${esc(d.category||'(목록에 없는 분야)')}</option>`:''}</select></label>
@@ -1586,27 +1734,57 @@ async function openForm(it){
       </div>
       <label class="fld">태그<input name="tags" placeholder="쉼표로 구분: docker, 정리" value="${esc((d.tags||[]).join(', '))}"></label>
       ${aiOn()?`<div class="ai-row"><button type="button" class="btn small" id="aiBtn">✦ AI 분류 제안</button><span class="hint" id="aiMsg">제목이나 주소를 넣고 누르면 분야·하위분야·태그를 채워 줍니다. 저장 전에 고칠 수 있습니다.</span></div>`:''}
-    </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">${edit?'저장':'추가'}</button></div></form>`);
+    </div><div class="modal-f"><span class="err" id="err" role="alert"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">${edit?'저장':'추가'}</button></div></form>`);
   const form=$('#form'); let type=d.type;
   function subOpts(){ const cid=form.category.value, c=catOf(cid); const set=new Set(c?c.subs:[]); S.items.forEach(i=>{ if(cid&&i.categoryId===cid&&i.sub) set.add(i.sub) }); $('#subOpts').innerHTML=[...set].map(s=>`<option value="${esc(s)}">`).join(''); }
+  // 주소에서 자동으로 채운 제목. 파일로 바꾸면 이것만 거둔다 (사용자가 직접 쓴 제목은 둔다)
+  let autoTitle='';
+  // 파일 형식이 비어 있으면 주소에서 끌어낸다 (구글 문서·시트, …/보고서.pdf)
+  // 웹 주소일 때만. 'C:\…\보고서.pdf' 도 URL 로는 읽혀서 저장 못 할 주소에서 형식을 채웠다
+  function fillFmt(){ if(type!=='file'||form.lang.value.trim()) return; const u=fixUrl(form.url.value); if(!/^https?:\/\//i.test(u)) return; const v=(cloudOf(u)||{}).fmt||extOf(u); if(v) form.lang.value=v; }
+  // 링크를 고칠 때마다 어느 서비스인지, 흔한 실수인지 바로 알려 준다. 저장을 막는 것은 submit 의 urlProblem 이다
+  function urlCheck(){
+    const el=$('#urlHint'), raw=form.url.value.trim(); let msg='', cls='';
+    if(!form.url.disabled&&raw){
+      const u=fixUrl(raw), c=cloudOf(u);
+      if(localPath(raw)||(type==='file'&&/^mailto:/i.test(u))){ msg=urlProblem(u,type); cls='warn'; }
+      else if(c&&c.list){ msg=c.list; cls='warn'; }
+      else if(c){ msg=`✓ ${c.n} 링크${c.note?' — '+c.note:''}${type==='file'?' · 공유를 "링크가 있는 모든 사용자" 로 했는지 확인해 주세요':''}`; cls=c.note?'warn':'ok'; }
+    }
+    el.textContent=msg; el.className='hint url-hint'+(cls?' '+cls:'');
+  }
   function applyType(){
     $('#types').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===type));
-    const noUrl=type==='note'||type==='snippet';
-    $('#fUrl').hidden=noUrl; form.url.disabled=noUrl;   // 숨긴 칸의 type=url 검증이 저장을 조용히 막지 않도록
+    const noUrl=type==='note'||type==='snippet', isFile=type==='file';
+    $('#fUrl').hidden=noUrl; form.url.disabled=noUrl;   // 숨긴 칸은 끈다. 저장할 때도 주소를 비워 보낸다
+    $('#fFile').hidden=!isFile;
+    $('#urlLabel').textContent=isFile?'파일 공유 링크':'주소 (URL)';
+    form.url.placeholder=isFile?'https://drive.google.com/file/d/…':'https://';
+    form.url.setAttribute('aria-required',String(!noUrl));   // 필수 검사는 submit 이 한다 (브라우저 말풍선 대신 이유를 말한다)
     $('#fLang').hidden=type==='link'||type==='note';
+    $('#langLabel').textContent=isFile?'파일 형식':'언어 / 형식';
     form.body.classList.toggle('code',type==='snippet');
     $('#bodyLabel').textContent={link:'한 줄 설명',note:'내용',snippet:'코드',file:'설명'}[type];
-    form.body.placeholder={link:'왜 저장했는지, 언제 쓰는지 한 줄',note:'정리한 내용을 자유롭게',snippet:'붙여넣기',file:'무슨 자료인지, 어디에 있는지'}[type];
-    form.url.required=type==='link';
-    form.lang.placeholder=type==='file'?'pdf, xlsx, png ...':'bash, python, json ...';
+    form.body.placeholder={link:'왜 저장했는지, 언제 쓰는지 한 줄',note:'정리한 내용을 자유롭게',snippet:'붙여넣기',file:'무슨 파일인지, 언제 쓰는지'}[type];
+    form.lang.placeholder=isFile?'pdf, xlsx, 문서 ...':'bash, python, json ...';
+    // 링크일 때 주소에서 채운 제목('drive.google.com')은 다른 종류로 바꾸면 거둔다. 파일 제목으로는 무슨 파일인지 모른다
+    if(type!=='link'&&autoTitle&&form.title.value===autoTitle) form.title.value='';
+    fillFmt(); urlCheck();
   }
   applyType(); subOpts();
   form.category.addEventListener('change',subOpts);
   $('#types').addEventListener('click',e=>{ const b=e.target.closest('[data-t]'); if(b){ type=b.dataset.t; applyType(); } });
-  form.url.addEventListener('blur',()=>{ if(!form.title.value&&form.url.value) form.title.value=host(form.url.value); });
+  form.url.addEventListener('input',urlCheck);
+  form.addEventListener('input',()=>{ $('#err').textContent=''; form.url.removeAttribute('aria-invalid'); });   // 고치기 시작하면 지난 저장 실패 문구는 걷는다
+  // 칸을 떠날 때 https:// 를 붙인다. 치는 도중에 붙이면 커서가 튄다
+  form.url.addEventListener('blur',()=>{
+    const u=fixUrl(form.url.value); if(u!==form.url.value) form.url.value=u;
+    if(u&&type==='link'&&!form.title.value) form.title.value=autoTitle=host(u);
+    fillFmt(); urlCheck();
+  });
   const aiBtn=$('#aiBtn'); if(aiBtn) aiBtn.addEventListener('click',async()=>{
     const f=form, msg=$('#aiMsg');
-    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':f.url.value.trim(),lang:f.lang.value.trim(),body:f.body.value.trim(),categoryId:f.category.value,category:catName(f.category.value),sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
+    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':fixUrl(f.url.value),lang:f.lang.value.trim(),body:f.body.value.trim(),categoryId:f.category.value,category:catName(f.category.value),sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
     if(!(item.title||item.url||item.body)){ msg.textContent='제목, 주소, 내용 중 하나는 먼저 적어 주세요.'; return; }
     aiBtn.disabled=true; msg.textContent='AI 가 살펴보는 중…';
     try{
@@ -1625,9 +1803,10 @@ async function openForm(it){
   });
   form.addEventListener('submit',async e=>{
     e.preventDefault(); const f=form, err=$('#err'); err.textContent='';
+    fillFmt();   // 주소 칸을 떠나지 않고 Enter 로 저장한 경우
     const item={
       id:edit?d.id:uid(), type, title:f.title.value.trim(),
-      url:(type==='note'||type==='snippet')?'':f.url.value.trim(),
+      url:(type==='note'||type==='snippet')?'':fixUrl(f.url.value),
       lang:(type==='snippet'||type==='file')?f.lang.value.trim():'',
       body:f.body.value.replace(/\s+$/,''),
       categoryId:f.category.value,
@@ -1641,6 +1820,13 @@ async function openForm(it){
     };
     if(edit) item.updatedAt=new Date().toISOString();
     if(!item.title){ err.textContent='제목을 입력해 주세요.'; return; }
+    // 링크·파일은 주소가 있어야 한다. 예전에는 칸이 type=url 이라 'drive.google.com/…' 처럼 https:// 가 빠진 주소를
+    // 브라우저가 이 처리기보다 먼저 말풍선으로 막았고, 파일은 비워 둬도 저장돼 열 길 없는 항목이 생겼다
+    // 단 수정에서 종류와 주소를 그대로 두었으면 막지 않는다. 예전 규칙으로 들어온 항목(링크 없는 파일, ftp: 등)의 태그·분야만
+    // 고치려는 분야 담당자·운영자는 그 링크를 모른다. 막으면 빠져나갈 길이 종류를 메모로 바꾸는 것뿐인데, 그러면 주소가 지워진다
+    if(type==='link'||type==='file'){ if(f.url.value!==item.url) f.url.value=item.url;
+      const m=urlProblem(item.url,type), same=edit&&type===d.type&&item.url===fixUrl(d.url);
+      if(m&&!same){ err.textContent=m; f.url.setAttribute('aria-invalid','true'); f.url.focus(); return; } }
     if(type==='snippet'&&!item.body){ err.textContent='코드를 붙여넣어 주세요.'; return; }
     f.querySelector('[type=submit]').disabled=true;
     try{
@@ -1701,8 +1887,17 @@ async function openReportForm(it){
     <div class="hint" style="font-size:12.5px;color:var(--muted)">"${esc(it.title)}"</div>
     <label class="fld">이유<select name="r">${Object.entries(REASONS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label>
     <label class="fld">설명 (선택)<textarea name="n" style="min-height:70px" maxlength="300" placeholder="운영자가 판단할 수 있게 짧게"></textarea></label>
+    <div class="hint" id="rfWhy" aria-live="polite"></div>
     <div class="hint">신고는 바로 항목을 숨기지 않습니다. 운영자가 검토한 뒤 처리합니다.</div>
+    <!-- 안내는 이 창 안에서 펼친다. 안내 창(openRights)을 띄우면 모달이 통째로 바뀌어 쓰던 신고가 사라졌다 -->
+    <details class="filenote"><summary style="margin-top:0">권리 침해 신고 안내</summary>${rightsBody()}</details>
   </div><div class="modal-f"><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">신고 보내기</button></div></form>`,'narrow');
+  // 권리 침해 사유를 고르면 무엇을 적으면 되는지 알려 준다. 연락처는 설명 칸에 적지 않게 한다 (신고는 운영자·그 분야 담당자가 본다)
+  const why={copyright:'어떤 저작물인지, 원본이 어디 있는지 적어 주세요. 연락처는 적지 마세요.'+(REPORT_EMAIL?' 권리자시라면 아래 안내의 메일로 근거와 함께 보내 주셔도 됩니다.':''),
+    privacy:'어떤 부분이 문제인지 적어 주세요. 연락처나 다른 개인정보는 여기에 적지 마세요.',
+    illegal:'운영자가 가장 먼저 확인합니다. 내용을 옮겨 적지 마세요.'};
+  const rf=$('#rf'), showWhy=()=>{ $('#rfWhy').textContent=why[rf.r.value]||''; };
+  rf.r.addEventListener('change',showWhy);
   $('#rf').addEventListener('submit',async e=>{
     e.preventDefault(); const f=e.target;
     const r={id:uid('r'),itemId:it.id,reason:f.r.value,note:f.n.value.trim(),by:ME.name||'',reporterId:ME.id,createdAt:new Date().toISOString()};
@@ -2203,13 +2398,155 @@ function openMore(){
     <button data-m="io">파일로 관리 <small>JSON 내보내기 · 가져오기</small></button>
     ${S.admin?`<button data-m="owners">분야 주 관리자 <small>분야마다 담당자 지정</small></button>`:''}
     ${aiReady()?`<button data-m="ai">✦ AI 정리 <small>항목 재분류 · 분야 구조 · 자료 채우기</small></button>`:''}
+    ${S.about||S.admin?`<button data-m="about">운영자 소개 <small>${S.about?esc(S.about.name):'아직 없음 · 쓰기'}</small></button>`:''}
+    <button data-m="rights">권리 침해 신고 <small>저작권 · 불법촬영물 · 사생활</small></button>
     ${loggedIn()?`<button data-m="name">이름 바꾸기 <small>${esc(ME.name||'이름 없음')}</small></button><button data-m="logout">로그아웃 <small>${esc(ME.email||({kakao:'카카오 계정',google:'Google 계정'})[ME.provider]||'')}</small></button>`:`<button data-m="login">로그인 <small>이메일 링크</small></button>`}
     </div>
     <div class="hint">${store&&store.kind==='db'?'공유 저장소 (모든 방문자에게 반영)':'미리보기 모드: 이 브라우저에만 저장'} · 항목 ${S.items.length}개 · 모음 ${S.cols.length}개<span id="verLine"></span></div>
   </div>`,'narrow');
   $('#veil').addEventListener('click',async e=>{ const b=e.target.closest('[data-m]'); if(!b) return; const m=b.dataset.m;
+    if(m==='about'){ closeModal(); openAbout(); return; } if(m==='rights') return openRights();
     if(m==='io') openIO(); else if(m==='owners') openCatOwners(); else if(m==='ai') openAiOrganize(); else if(m==='name') openNameForm(); else if(m==='login') openLogin(); else if(m==='logout'){ await store.logout(); closeModal(); toast('로그아웃했습니다'); } });
   showVersion();
+}
+
+/* ---------- 권리 침해 신고 안내 ----------
+   저작권법 103조 4항: 복제·전송 중단 요구를 받을 사람을 정해 이용자가 쉽게 알 수 있게 공지해야 면책된다.
+   신고 버튼은 로그인해야 쓸 수 있어 회원이 아닌 권리자는 막힌다. 그래서 메일 창구를 함께 적는다 (config.js REPORT_EMAIL).
+   문구는 법률 검토 전 초안이다 (todo.md) */
+const REPORT_EMAIL=(v=>/^[^\s@<>"'&]+@[^\s@<>"'&]+\.[^\s@<>"'&]+$/.test(v)?v:'')(String(CFG.REPORT_EMAIL||'').trim());
+// 안내 본문. 바닥글·⋯ 메뉴의 안내 창과 신고 폼 안의 펼침이 같은 글을 쓴다.
+// 메일 창구(REPORT_EMAIL)가 비어 있으면 메일 이야기를 하지 않는다 — "연락처를 적어 주세요" 가 [신고] 설명 칸 지시로 읽혀,
+// 운영자와 분야 담당자가 함께 보는 칸에 연락처가 쌓인다
+function rightsBody(){
+  const mail=REPORT_EMAIL?`<a href="mailto:${esc(REPORT_EMAIL)}?subject=${encodeURIComponent('['+(CFG.SITE_NAME||'빠른 연결')+'] 권리 침해 신고')}">${esc(REPORT_EMAIL)}</a>`:'';
+  return `<div style="display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.65;color:var(--text);margin-top:6px">
+    <p style="margin:0">이 사이트는 이용자가 올린 링크·메모·코드를 모아 보여 주는 곳이고, <b>파일을 직접 보관하지 않습니다.</b> 파일은 각 링크가 가리키는 바깥 서비스(구글 드라이브 등)에 있습니다.</p>
+    <p style="margin:0">저작권 침해, 불법촬영물, 사생활 침해·명예훼손에 해당하는 자료를 보시면 알려 주세요.</p>
+    <ul style="margin:0;padding-left:18px">
+      <li><b>로그인한 분</b>: 그 자료를 펼쳐 [신고] 를 누르고 이유를 고르면 됩니다. 신고는 운영자와 그 분야 담당자가 보므로 설명 칸에 연락처는 적지 마세요.</li>
+      ${mail?`<li><b>로그인하지 않은 분·권리자</b>: 메일로 보내 주세요 — ${mail}. 자료 주소(자료의 [링크 복사]), 어떤 권리가 어떻게 침해됐는지, 권리자임을 알 수 있는 근거, 회신받을 연락처를 적어 주세요. 신분증 사본 같은 고유식별정보는 보내지 마세요.</li>`
+        :'<li><b>로그인하지 않은 분·권리자</b>: 메일 창구를 준비하고 있습니다. 그동안은 로그인한 뒤 [신고] 로 알려 주세요.</li>'}
+    </ul>
+    <p style="margin:0"><b>받는 사람</b>: 이 사이트의 운영자${mail?` (${mail})`:''}</p>
+    <p style="margin:0"><b>처리</b>: 확인되면 지체 없이 그 자료를 지웁니다. 불법촬영물은 가장 먼저 처리합니다.${mail?' 메일로 알려 주신 분께는 결과를 회신합니다.':''}
+      권리 침해를 되풀이하는 계정은 이용을 제한하거나 삭제할 수 있습니다.</p>
+    <p style="margin:0" class="hint">여기서 지워도 바깥 서비스에 있는 원본 파일은 남습니다. 원본은 그 서비스에도 신고해 주세요.</p>
+  </div>`;
+}
+function openRights(){
+  modal(`${mh('권리 침해 신고')}<div class="modal-b">${rightsBody()}</div><div class="modal-f"><button type="button" class="btn" data-close>닫기</button></div>`,'narrow');
+}
+
+/* ---------- 운영자 소개 (?about) ----------
+   자료함 첫 화면은 그대로 두고 화면을 하나 더 둔다 (S.view='about'). 운영자의 개인 홈페이지 역할이다.
+   내용은 settings.about (normAbout). 운영자만 쓰고 누구나 읽는다. 운영자는 그 화면에서 바로 고친다 */
+function openAbout(){ Object.assign(S,{view:'about',sel:null,cursor:-1}); render(); scrollTo(0,0); }
+// 바닥글의 '운영자 소개'. 소개가 없으면 방문자에게는 감춘다 (빈 화면으로 보내지 않는다). 운영자에게는 쓰러 갈 길로 보인다
+// 한 번 깨진 사진 주소. 소개 화면은 그릴 때마다 <img> 를 새로 만들어서, 기억하지 않으면 그때마다 다시 요청하고 또 깨진다
+let badPhoto='';
+function renderAboutFoot(){ $('#aboutFoot').hidden=!(S.about||S.admin); }
+function renderAbout(){
+  const el=$('#about'), a=S.about;
+  const back='<button type="button" class="btn small ghost" data-about-close>자료함으로</button>';
+  if(!a){
+    // 아직 못 읽었으면 기다린다. 첫 그리기는 store 를 만들기 전이라 store 가 비어 있다
+    const wait=!S.aboutRead&&(!store||store.kind==='db');
+    el.innerHTML=`<div class="about">${
+      wait&&S.aboutErr?`<div class="empty"><b>소개를 불러오지 못했습니다</b>${esc(S.aboutErr)}<br>새로 고침해 주세요.</div>`
+      :wait?'<div class="empty"><b>소개를 불러오는 중입니다</b>잠시만 기다려 주세요.</div>'
+      :S.admin?'<div class="empty"><b>아직 운영자 소개가 없습니다</b>이름·소개글·링크·대표 모음을 적으면 개인 홈페이지처럼 쓸 수 있습니다.<br><button type="button" class="btn primary small" data-about-edit style="margin-top:12px">소개 쓰기</button></div>'
+      :'<div class="empty"><b>운영자 소개를 준비하고 있습니다</b>나중에 다시 들러 주세요.</div>'
+    }<p style="text-align:center;margin:0">${back}</p></div>`;
+    return;
+  }
+  const web=u=>/^https?:/i.test(u);
+  const photo=web(a.photo)&&host(a.photo)&&a.photo!==badPhoto?a.photo:'';
+  const links=a.links.map(l=>({...l,su:safeUrl(l.url)})).filter(l=>l.su);
+  const live=new Set(S.items.map(x=>x.id));
+  const cols=a.cols.map(id=>S.cols.find(c=>c.id===id)).filter(Boolean), lost=a.cols.length-cols.length;
+  const recent=a.recent&&a.owner?S.items.filter(it=>it.ownerId===a.owner).sort((x,y)=>(y.createdAt||'').localeCompare(x.createdAt||'')).slice(0,5):[];
+  el.innerHTML=`<section class="about">
+    <div class="ab-head">
+      ${photo?`<img class="ab-av" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" loading="lazy">`:`<span class="ab-av" aria-hidden="true">${esc([...a.name][0]||'?')}</span>`}
+      <div class="ab-id"><h1>${esc(a.name)}</h1>${a.tagline?`<p class="ab-tag">${esc(a.tagline)}</p>`:''}</div>
+      <div class="sp">${linkOn()?'<button type="button" class="btn small ghost" data-about-share title="이 소개 화면으로 바로 오는 주소를 복사합니다">링크 복사</button>':''}${S.admin?'<button type="button" class="btn small" data-about-edit>편집</button>':''}${back}</div>
+    </div>
+    ${a.bio?`<div class="ab-bio">${esc(a.bio)}</div>`:''}
+    ${links.length?`<div class="ab-links">${links.map(l=>`<a class="btn small" href="${esc(l.su)}"${web(l.su)?' target="_blank" rel="noopener me"':''}>${esc(l.label||srcName(l.su)||l.su.replace(/^mailto:/i,''))}${web(l.su)?' ↗':''}</a>`).join('')}</div>`:''}
+    ${cols.length?`<h3>대표 모음</h3><div class="ab-cols">${cols.map(c=>`<button type="button" class="ab-col" data-about-col="${esc(c.id)}"><b>▤ ${esc(c.title)}</b>${c.desc?`<span>${esc(c.desc)}</span>`:''}<small>자료 ${(c.itemIds||[]).filter(id=>live.has(id)).length}개</small></button>`).join('')}</div>`:''}
+    ${S.admin&&a.photo&&a.photo===badPhoto?'<p class="hint">사진을 불러오지 못해 이름 첫 글자로 보입니다. [편집] 에서 사진 주소를 확인해 주세요.</p>':''}
+    ${S.admin&&lost?`<p class="hint">대표 모음 ${lost}개를 찾을 수 없습니다. 지워졌거나 아직 불러오는 중입니다. 계속 안 보이면 [편집] 에서 다시 골라 주세요.</p>`:''}
+    ${recent.length?`<h3>최근 올린 자료</h3><div class="ab-recent">${recent.map(it=>`<button type="button" class="ab-item" data-about-open="${esc(it.id)}"><span class="kind ${esc(it.type)}">${(TYPES[it.type]||TYPES.note).k}</span><span class="t">${esc(it.title||'(제목 없음)')}</span><small>${rel(it.createdAt)}</small></button>`).join('')}</div>`:''}
+  </section>`;
+  // 사진 주소가 깨졌으면 이름 첫 글자로 바꾼다. 깨진 그림 표시가 남는 것보다 낫다
+  const im=el.querySelector('img.ab-av');
+  if(im) im.addEventListener('error',()=>{ badPhoto=photo; if(S.view==='about') renderAbout(); },{once:true});   // 다시 그리면 첫 글자와 (운영자에게) 안내가 나온다
+}
+$('#about').addEventListener('click',e=>{
+  if(e.target.closest('[data-about-edit]')) return openAboutForm();
+  if(e.target.closest('[data-about-close]')){ S.view='list'; render(); return; }
+  if(e.target.closest('[data-about-share]')) return shareUrl(location.origin+location.pathname+'?about',(S.about||{}).name);
+  const c=e.target.closest('[data-about-col]');
+  if(c){ Object.assign(S,{view:'list',col:c.dataset.aboutCol,q:'',type:'all',catId:'all',sub:null,tag:null,mine:false,sel:null,cursor:-1}); $('#q').value=''; render(); scrollTo(0,0); return; }
+  const o=e.target.closest('[data-about-open]');
+  if(o){ const id=o.dataset.aboutOpen; S.view='list'; openLinked(id); render(); scrollToRow(id); }
+});
+$('#aboutLink').addEventListener('click',e=>{ e.preventDefault(); openAbout(); });
+$('#rightsLink').addEventListener('click',e=>{ e.preventDefault(); openRights(); });
+function openAboutForm(){
+  if(!S.admin){ toast('운영자만 고칠 수 있습니다'); return; }
+  const a=S.about||{name:ME.name||'',tagline:'',bio:'',photo:'',links:[],cols:[],recent:true,owner:''};
+  // 고를 수 있는 모음: 내 것 먼저. 이미 골랐는데 지금 목록에 없는 것(지워졌거나 아직 못 읽음)은 맨 위에 남긴다 —
+  // 목록에서 빼면 저장할 때 말없이 떨어진다
+  const known=new Set(S.cols.map(c=>c.id));
+  const opts=[...a.cols.filter(id=>!known.has(id)).map(id=>({id,title:'(찾을 수 없는 모음)',n:-1})),
+    ...S.cols.slice().sort((x,y)=>((y.ownerId===ME.id)-(x.ownerId===ME.id))||(x.title||'').localeCompare(y.title||'','ko')).map(c=>({id:c.id,title:c.title,n:(c.itemIds||[]).length}))];
+  const linksText=a.links.map(l=>l.label?`${l.label} | ${l.url}`:l.url).join('\n');
+  modal(`${mh('운영자 소개 편집')}<form id="abf" autocomplete="off"><div class="modal-b">
+    <div class="hint" style="font-size:12.5px">누구나 보는 공개 화면입니다. 전화번호·집 주소 같은 개인정보는 넣지 마세요. 연락처가 필요하면 메일 링크 정도면 충분합니다.</div>
+    <div class="two">
+      <label class="fld">이름<input name="nm" required maxlength="40" value="${esc(a.name)}"></label>
+      <label class="fld">한 줄 소개 (선택)<input name="tagline" maxlength="80" placeholder="예: 작은 도구를 만들고 모으는 사람" value="${esc(a.tagline)}"></label>
+    </div>
+    <label class="fld">소개글 (선택)<textarea name="bio" maxlength="2000" placeholder="하는 일, 관심사, 이 사이트를 만든 이유">${esc(a.bio)}</textarea></label>
+    <label class="fld">사진 주소 (선택)<input name="photo" type="text" inputmode="url" autocapitalize="off" spellcheck="false" maxlength="500" placeholder="https://…/me.jpg · 비우면 이름 첫 글자" value="${esc(a.photo)}"><span class="hint">그림 파일 주소를 넣어 주세요. 그 주소의 서버는 이 화면을 연 사람의 접속 정보(IP 등)를 받습니다.</span></label>
+    <label class="fld">링크 (선택 · 한 줄에 하나 · 이름 | 주소 · ${ABOUT_MAX.links}개까지)<textarea name="links" style="min-height:96px" placeholder="블로그 | https://blog.example.com&#10;GitHub | https://github.com/…&#10;메일 | mailto:me@example.com">${esc(linksText)}</textarea></label>
+    <div style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted)">대표 모음 (선택 · ${ABOUT_MAX.cols}개까지)
+      ${opts.length?`<div class="checks" style="max-height:30vh">${opts.map(o=>`<label><input type="checkbox" name="col" value="${esc(o.id)}" ${a.cols.includes(o.id)?'checked':''}>▤ ${esc(o.title)}<span class="own">${o.n<0?'':o.n+'개'}</span></label>`).join('')}</div>`
+        :'<div class="hint">아직 모음이 없습니다. 왼쪽 [＋ 새 모음] 으로 만들면 여기서 고를 수 있습니다.</div>'}
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" name="recent" ${a.recent?'checked':''}> 최근 올린 자료 5개 보이기</label>
+  </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" type="submit">저장</button></div></form>`,'wide');
+  $('#abf').addEventListener('submit',async e=>{
+    e.preventDefault(); const f=e.target, err=$('#err'); err.textContent='';
+    const name=f.nm.value.trim(); if(!name){ err.textContent='이름을 입력해 주세요.'; return; }
+    const photo=fixUrl(f.photo.value);
+    if(photo&&!(/^https:\/\//i.test(photo)&&host(photo))){ err.textContent='사진 주소는 https:// 로 시작하는 그림 주소여야 합니다.'; f.photo.focus(); return; }
+    // 구글 드라이브 등의 공유 링크는 그림이 아니라 보기 화면이라 <img> 로 못 불러온다. 저장되고 나서 말없이 첫 글자만 보였다
+    if(photo&&cloudOf(photo)){ err.textContent='클라우드 공유 링크는 그림 주소가 아닙니다. 그림을 브라우저에서 열고 [이미지 주소 복사] 로 받은 주소를 넣어 주세요.'; f.photo.focus(); return; }
+    // 링크는 줄마다 검사하고 몇 번째 줄이 틀렸는지 말해 준다. 조용히 버리면 저장한 뒤에야 빠진 줄을 알아챈다
+    const lines=f.links.value.split('\n').map(x=>x.trim()).filter(Boolean), links=[];
+    if(lines.length>ABOUT_MAX.links){ err.textContent=`링크는 ${ABOUT_MAX.links}개까지 넣을 수 있습니다 (지금 ${lines.length}줄).`; f.links.focus(); return; }
+    for(let i=0;i<lines.length;i++){
+      // '|' 를 빠뜨리고 '블로그: https://…' 처럼 쓴 줄은 주소가 시작하는 곳에서 나눈다. 안 그러면 줄 전체를 주소로 보고
+      // "https:// 로 시작해야 합니다" 라는, 눈앞의 https:// 와 맞지 않는 이유로 거절했다
+      let k=lines[i].indexOf('|'), label='', raw=lines[i];
+      if(k>=0){ label=lines[i].slice(0,k).trim(); raw=lines[i].slice(k+1); }
+      else{ k=lines[i].search(/(https?:\/\/|mailto:)/i); if(k>0){ label=lines[i].slice(0,k).replace(/[\s:：\-–—]+$/,''); raw=lines[i].slice(k); } }
+      const url=fixUrl(raw);
+      const m=label.length>30?'이름은 30자까지입니다.':url.length>500?'주소가 너무 깁니다.':urlProblem(url,'link');
+      if(m){ err.textContent=`링크 ${i+1}번째 줄: ${m}`; f.links.focus(); return; }
+      links.push({label,url});
+    }
+    const cols=[...f.querySelectorAll('input[name=col]:checked')].map(x=>x.value);
+    if(cols.length>ABOUT_MAX.cols){ err.textContent=`대표 모음은 ${ABOUT_MAX.cols}개까지 고를 수 있습니다 (지금 ${cols.length}개).`; return; }
+    // owner(최근 자료를 보여 줄 계정)는 처음 쓴 운영자로 굳힌다. 다른 운영자가 고쳐도 남의 자료로 바뀌지 않게
+    const next={name,tagline:f.tagline.value,bio:f.bio.value,photo,links,cols,recent:f.recent.checked,owner:(S.about&&S.about.owner)||ME.id};
+    const btn=f.querySelector('[type=submit]'); btn.disabled=true;
+    try{ await store.saveAbout(next); closeModal(); toast('소개를 저장했습니다'); S.view='about'; render(); }
+    catch(x){ btn.disabled=false; err.textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')'; }
+  });
 }
 
 function openIO(){
@@ -2313,9 +2650,9 @@ function retryCols(){
   COL_ERR=''; render();
   Promise.resolve().then(()=>store.reloadCols()).catch(e=>{ COL_ERR=(e&&e.message)||'모음을 불러오지 못했습니다'; render(); });
 }
-// 주소는 읽기만 한다. 우리 키 넷만 본다 — 로그인 실패로 붙은 error* 키 등은 쳐다보지 않는다
+// 주소는 읽기만 한다. 우리 키(i·c·cat·q·about)만 본다 — 로그인 실패로 붙은 error* 키 등은 쳐다보지 않는다
 function readLink(){
-  const p=new URLSearchParams(location.search), o={i:null,c:null,cat:null,q:p.get('q')||'',key:'',moved:false,held:false}; let bad=false;
+  const p=new URLSearchParams(location.search), o={i:null,c:null,cat:null,q:p.get('q')||'',about:p.has('about'),key:'',moved:false,held:false}; let bad=false;
   ['i','c','cat'].forEach(k=>{ const v=p.get(k); if(!v) return; if(okId(v)) o[k]=v; else bad=true; });
   // 문장 끝 괄호·마침표가 주소에 붙어 오는 일이 흔하다. 조용히 넘기면 링크가 틀린 줄 모르고 전체 목록만 본다
   if(bad) linkNote('링크 주소 일부가 잘못되어 무시했습니다. 보낸 분께 링크를 다시 받아 주세요.');
@@ -2335,6 +2672,7 @@ function linkMoved(){ if(LINK.i&&!LINK.moved&&linkKey()!==LINK.key) LINK.moved=t
 // 불러오기가 늦거나 실패한 사이 주소에서 지워 버리면 새로 고침으로 되살릴 길이 없다.
 // 단 사용자가 먼저 움직였으면 뺀다. 남기면 다른 자료를 열었다 닫은 뒤 주소가 본 적도 없는 자료를 가리킨다
 function linkQuery(){
+  if(S.view==='about') return '?about';   // 소개 화면은 그것 하나로 충분하다. 로그인하고 돌아올 때도 소개로 온다
   const p=new URLSearchParams(), i=openId()||(LINK.moved?null:LINK.i), q=S.q.trim();
   if(i) p.set('i',i);
   if(okId(S.col)) p.set('c',S.col);
@@ -2424,7 +2762,9 @@ function scrollToRow(id){
    터치 기기에 공유 창이 있으면 그걸 연다(메신저로 바로 보낸다). 사용자가 닫으면 AbortError 인데 실패가 아니다. */
 async function shareLink(key,id,title){
   if(!okId(id)) return;
-  const url=location.origin+location.pathname+'?'+key+'='+id;
+  return shareUrl(location.origin+location.pathname+'?'+key+'='+id,title);
+}
+async function shareUrl(url,title){
   if(navigator.share&&matchMedia('(pointer:coarse)').matches){
     try{ await navigator.share({title:title||document.title,url}); return; }
     catch(e){ if(e&&e.name==='AbortError') return; }   // 그 밖의 실패는 복사로 넘긴다
@@ -2470,6 +2810,7 @@ const LINK=readLink();
 if(LINK.cat) S.catId=LINK.cat;
 if(LINK.q){ S.q=LINK.q; $('#q').value=LINK.q; }
 if(LINK.c) S.col=LINK.c;
+if(LINK.about) S.view='about';
 LINK.key=linkKey();   // 여기서부터 달라지면 사용자가 움직인 것이다 (linkMoved)
 render();
 (function(){
@@ -2492,7 +2833,7 @@ render();
   S.openCatIds=(LS.get('toolbox.openCatIds',[])||[]).filter(x=>typeof x==='string');
   // 분야 링크는 사이드바에서도 그 분야를 펼친다 (분야를 누를 때와 같게)
   if(LINK.cat&&LINK.cat!=='all'&&!S.openCatIds.includes(LINK.cat)){ S.openCatIds=[...S.openCatIds,LINK.cat]; LS.set('toolbox.openCatIds',S.openCatIds); }
-  store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[]}); const go=followLink(d); render(); if(go) scrollToRow(go); });
+  store.subscribe(d=>{ Object.assign(S,{items:d.items,cats:d.cats,cols:d.cols,reports:d.reports,myVotes:d.myVotes||[],about:d.about||null,aboutRead:d.readAbout||0,aboutErr:d.aboutErr||''}); const go=followLink(d); render(); if(go) scrollToRow(go); });
   // 메일 링크가 만료·사용됨 상태로 돌아온 경우: 주소의 오류를 읽어 안내하고 코드 입력으로 유도
   const h=new URLSearchParams(location.hash.replace(/^#/,''));
   if(ready&&h.get('error')){

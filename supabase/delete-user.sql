@@ -60,6 +60,13 @@ begin
   get diagnostics v_n = row_count;
   insert into delete_user_result values ('분야 담당자 지정 해제 (settings 행)', v_n);
 
+  -- (1-2) 운영자 소개(settings.about)의 owner. "최근 올린 자료" 를 보여 줄 계정의 UUID 이고, 이것도 외래키가 없다.
+  --       지우지 않으면 탈퇴한 계정의 UUID 가 누구나 읽는 settings 에 남는다. 빼 두면 다음에 소개를 저장한 운영자로 채워진다
+  update public.settings set value = value - 'owner', updated_at = now()
+   where key = 'about' and value->>'owner' = v_uid::text;
+  get diagnostics v_n = row_count;
+  insert into delete_user_result values ('운영자 소개 owner 해제 (settings 행)', v_n);
+
   -- (2) 올린 자료·모음. updated_at 은 건드리지 않는다 — 이름을 가린 것이 "수정" 은 아니다
   if v_delete_posts then
     delete from public.collections where owner_id = v_uid;
