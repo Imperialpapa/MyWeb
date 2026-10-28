@@ -28,5 +28,5 @@ window.TOOLBOX_CONFIG = {
   // 사진·영상 직접 올리기. Cloudflare R2 **공개 버킷의 주소**를 넣으면 켜집니다. 예: "https://pub-xxxx.r2.dev"
   // supabase/functions/media 를 배포하고 R2 비밀 값을 등록해야 동작합니다 (README "사진·영상"). 비워 두면 꺼집니다.
   // 올린 사진·영상은 운영자가 승인해야 공개됩니다.
-  MEDIA_BASE: "",
+  MEDIA_BASE: "https://pub-56e18436352746019b20fd2be46dbfe7.r2.dev",
 };
