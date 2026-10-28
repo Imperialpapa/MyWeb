@@ -173,6 +173,8 @@ button{cursor:pointer}
 a{color:var(--link)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 [hidden]{display:none!important}
+/* 사진·영상은 파일과 같은 색을 쓴다 (시간대 스킨마다 색을 하나 더 짓지 않으려고) */
+:root{--media:var(--file)}
 .mono{font-family:var(--mono)}
 .num{font-variant-numeric:tabular-nums}
 
@@ -297,7 +299,10 @@ a{color:var(--link)}
 .row.sel{background:var(--surface2);box-shadow:inset 3px 0 0 var(--accent)}
 .row.flag{box-shadow:inset 3px 0 0 var(--bad)}
 .kind{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:3px 0;text-align:center;border-radius:4px;border:1px solid currentColor;line-height:1.2;margin-top:2px}
-.kind.link{color:var(--link)} .kind.note{color:var(--note)} .kind.snippet{color:var(--code)} .kind.file{color:var(--file)}
+.kind.link{color:var(--link)} .kind.note{color:var(--note)} .kind.snippet{color:var(--code)} .kind.file{color:var(--file)} .kind.media{color:var(--media)}
+.media-box{margin-bottom:10px}
+.media-box img,.media-box video{display:block;max-width:100%;max-height:480px;border-radius:8px;border:1px solid var(--line);background:var(--bg2)}
+.rv-row .media-box img,.rv-row .media-box video{max-height:260px;margin-top:8px}
 .row-main{min-width:0}
 .row-title{font-weight:500;font-size:14.5px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .row-title .host{font-family:var(--mono);font-size:11.5px;color:var(--muted);font-weight:400}
@@ -326,6 +331,8 @@ mark{background:var(--accent-soft);color:inherit;border-radius:2px;padding:0 1px
 .rv{border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
 .rv-row{padding:12px 14px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:10px}
 .rv-row:first-child{border-top:0}
+.rv-h{font-size:13.5px;margin:16px 0 4px}
+.rv-h+.hint{margin:0 0 8px}
 .rv-row ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px}
 .rv-row .acts{display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
 
@@ -455,6 +462,7 @@ mark{background:transparent;color:inherit;border-radius:0;padding:0;
 .row:has(>.kind.note){--tape:var(--note)}
 .row:has(>.kind.snippet){--tape:var(--code)}
 .row:has(>.kind.file){--tape:var(--file)}
+.row:has(>.kind.media){--tape:var(--media)}
 .list .empty{background:var(--surface);border-radius:14px;box-shadow:var(--shadow)}
 .detail{background:var(--bg);border-color:var(--line);border-radius:9px}
 
@@ -644,6 +652,12 @@ const SB_KEY=CFG.SUPABASE_PUBLISHABLE_KEY||CFG.SUPABASE_ANON_KEY||'';
 let DB_ERR='';        // 자료 조회 실패 메시지 (빈 목록과 구분해서 보여 준다)
 let COL_ERR='';       // 모음 조회 실패 메시지. 모음 링크가 기다리는 동안 이유를 보여 준다 (render 참고)
 const AI_ON=CFG.AI!==false;   // AI 버튼 표시 여부. 실제 동작은 Edge Function 배포 후 (미리보기 모드에서는 숨김)
+// 사진·영상: R2 공개 버킷 주소. 비어 있으면 올리기를 숨긴다 (이미 있는 사진·영상 자료는 그대로 보인다)
+const MEDIA_BASE=String(CFG.MEDIA_BASE||'').trim().replace(/\/+$/,'');
+// 형식별 상한. schema.sql 의 media_begin 이 정본이고, 여기서는 올리기 전에 미리 알려 주는 데만 쓴다
+const MEDIA_TYPES={'image/jpeg':10,'image/png':10,'image/webp':10,'image/gif':10,'video/mp4':50,'video/webm':50};
+const MEDIA_SEC=60;   // 영상 길이 상한(초). 서버는 길이를 볼 수 없다 — 운영자가 끝까지 봐야 하므로 화면에서 막는다
+const MEDIA_KEY_RE=/^m\/[0-9a-f]{32}\.(jpg|png|webp|gif|mp4|webm)$/;
 // 설정을 받기 전 첫 화면을 그리는 데만 쓴다. id·이름은 schema.sql 의 기본 분야와 같아야 한다.
 const DEFAULT_CATS=[{id:'dev',name:'개발·도구',subs:[]},{id:'life',name:'생활·건강·취미',subs:[]},{id:'ai',name:'AI 에이전트',subs:[]},{id:'humor',name:'유머',subs:[]}];
 // 분야 하나: {id, name, subs, owner?, ownerName?}
@@ -721,6 +735,7 @@ function LocalStore(){
     async people(){ return me.name?[{id:me.id,name:me.name}]:[] },
     async markChecked(ids){ const at=new Date().toISOString(); (ids||[]).forEach(id=>{ const it=D.items.find(x=>x.id===id); if(it) it.checkedAt=at; }); LS.set(K.items,D.items); emit(); return (ids||[]).length },
     async ai(){ throw new Error('미리보기 모드에서는 AI 기능을 쓸 수 없습니다. config.js 에 Supabase 를 연결해 주세요.') },
+    async media(){ throw new Error('미리보기 모드에서는 사진·영상을 올릴 수 없습니다.') },
   };
 }
 
@@ -735,7 +750,8 @@ function SupabaseStore(){
   const subs=[]; let authCb=null;
   const emit=()=>subs.forEach(cb=>cb({...D,items:D.items.slice(),cols:D.cols.slice(),reports:D.reports.slice(),myVotes:D.myVotes.slice()}));
   // row ↔ item 변환
-  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',categoryId:r.category_id||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null,checkedAt:r.checked_at||null});
+  const fromItem=r=>({id:r.id,type:r.type,title:r.title,url:r.url||'',lang:r.lang||'',body:r.body||'',category:r.category||'',categoryId:r.category_id||'',sub:r.sub||'',tags:r.tags||[],votes:r.votes||0,by:r.by||'',ownerId:r.owner_id||null,createdAt:r.created_at,updatedAt:r.updated_at||null,checkedAt:r.checked_at||null,
+    status:r.status||'approved',mediaKey:r.media_key||'',mediaType:r.media_type||''});
   // category_id 는 빈 문자열을 보내면 안 된다. 제약이 null 또는 형식에 맞는 값만 받는다.
   // 이름 사본은 화면이 들고 있던 값 대신 id 에서 다시 끌어낸다. 낡은 이름을 함께 보내면
   // 서버 트리거가 "분야 목록이 그 사이에 바뀌었습니다" 로 저장을 통째로 거절한다.
@@ -971,7 +987,8 @@ function SupabaseStore(){
       const upd=()=>{ const {id,owner_id,created_at,...rest}=row; return sb.from('items').update(rest).eq('id',it.id) };
       if(D.items.some(x=>x.id===it.id)){ const {error}=await upd(); if(error) fail(error); }
       else{
-        const {error}=await sb.from('items').insert(row);
+        // 사진·영상의 열쇠는 새 자료에만 싣는다. 고칠 때 실으면 컬럼 권한에 걸려 42501 이다 (status·media_* 는 서버가 정한다)
+        const {error}=await sb.from('items').insert(it.mediaKey?{...row,media_key:it.mediaKey}:row);
         if(error){ if(error.code!=='23505') fail(error); const {error:e2}=await upd(); if(e2) fail(e2); }   // 이미 있던 행이면 수정으로
       }
       bump('items');
@@ -1043,6 +1060,20 @@ function SupabaseStore(){
       if(data&&data.error){ const err=new Error(data.error); err.code='ai'; throw err; }
       return data||{};
     },
+    // 사진·영상: Edge Function 'media' (upload·view·approve·sweep). 승인하면 자료가 바뀌므로 다시 읽는다
+    async media(action,payload){
+      const {data,error}=await sb.functions.invoke('media',{body:{action,...(payload||{})}});
+      if(error){
+        let msg=error.message||'사진·영상 요청에 실패했습니다'; const ctx=error.context;
+        if(ctx&&ctx.status===404&&!(payload&&payload.id)) msg='사진·영상 기능이 아직 배포되지 않았습니다 (README "사진·영상")';
+        if(ctx&&typeof ctx.json==='function'){ try{ const j=await ctx.json(); if(j&&j.error) msg=j.error; }catch(e){} }
+        else if(/Failed to send|fetch/i.test(msg)) msg='서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요';
+        const err=new Error(msg); err.code=(ctx&&ctx.status)||'media'; throw err;
+      }
+      if(data&&data.error){ const err=new Error(data.error); err.code='media'; throw err; }
+      if(action==='approve') bump('items');
+      return data||{};
+    },
   };
 }
 
@@ -1058,7 +1089,9 @@ const EXAMPLES=[
    ================================================================ */
 // file 의 이름은 '파일' 이다. 예전 이름 '자료' 는 사이트 전체에서 "항목" 이라는 뜻으로도 써서 둘이 구분되지 않았다.
 // 이 사이트는 파일을 보관하지 않는다 — file 항목도 바깥 클라우드의 공유 링크를 적어 두는 것이다 (openForm 의 안내)
-const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'파일'}};
+// media(사진·영상)는 이 사이트가 직접 보관하는 유일한 종류다 (R2). 운영자가 승인해야 공개된다
+const TYPES={link:{k:'LINK',n:'링크'},note:{k:'NOTE',n:'메모'},snippet:{k:'CODE',n:'코드'},file:{k:'FILE',n:'파일'},media:{k:'MEDIA',n:'사진·영상'}};
+const noUrlType=t=>t==='note'||t==='snippet'||t==='media';
 // reports.reason 에는 제약이 없어 사유를 더해도 DB 는 그대로다. 뒤의 셋은 권리 침해 신고 (openRights)
 const REASONS={spam:'스팸·광고',wrong:'틀린 정보·깨진 링크',bad:'부적절한 내용',dup:'중복',copyright:'저작권 침해',privacy:'사생활 침해·명예훼손',illegal:'불법촬영물 등'};
 // 이 사유가 하나라도 붙은 자료는 검토함 맨 위로 올리고 '긴급' 으로 표시한다. 알게 되면 지체 없이 지워야 한다 (전기통신사업법 22조의5)
@@ -1162,6 +1195,41 @@ const canEdit=o=>S.admin||(!!o.ownerId&&o.ownerId===ME.id)||managesCatId(o.categ
 const myReported=()=>new Set(S.reports.filter(r=>r.reporterId===ME.id).map(r=>r.itemId));
 /* AI: 운영자용 정리 도구는 공유 저장소 + 운영자일 때만, 분류 제안 버튼은 공유 저장소 + 로그인일 때 */
 const aiOn=()=>AI_ON&&!!store&&store.kind==='db';
+const mediaOn=()=>!!MEDIA_BASE&&!!store&&store.kind==='db';
+const pendingOf=()=>S.items.filter(x=>x.status==='pending');
+// 승인된 사진·영상의 공개 주소. 열쇠 모양이 아니면 주소를 만들지 않는다 (화면 속성에 그대로 들어간다)
+const mediaUrl=it=>it.status==='approved'&&MEDIA_BASE&&MEDIA_KEY_RE.test(it.mediaKey||'')?MEDIA_BASE+'/'+it.mediaKey:'';
+const isVideo=it=>/^video\//.test(it.mediaType||'')||/\.(mp4|webm)$/.test(it.mediaKey||'');
+const mediaTag=(it,src)=>isVideo(it)?`<video controls preload="metadata" playsinline src="${esc(src)}"></video>`:`<img loading="lazy" alt="${esc(it.title||'')}" src="${esc(src)}">`;
+// 승인 전 파일은 비공개 버킷에 있어 서명한 주소로만 열린다. 누른 사람에게만 그 자리에 붙인다
+async function mediaPreview(btn){
+  const it=byId(btn.dataset.mview); const box=btn.closest('[data-mbox]'); if(!it.id||!box) return;
+  btn.disabled=true; btn.textContent='불러오는 중…';
+  try{
+    const r=await store.media('view',{id:it.id});
+    const src=r.url||mediaUrl(it); if(!src) throw new Error('주소를 받지 못했습니다');
+    box.innerHTML=`<div class="media-box">${mediaTag(it,src)}</div>`;
+  }catch(x){ btn.disabled=false; btn.textContent='확인용으로 보기'; toast('불러오지 못했습니다: '+(x.message||x.code||'오류')); }
+}
+// 운영자 승인: 파일을 공개 버킷으로 옮기고 공개한다
+async function approveMedia(id,quiet){
+  try{ await store.media('approve',{id}); if(!quiet) toast('승인했습니다. 이제 누구나 볼 수 있습니다'); return true; }
+  catch(x){ toast('승인하지 못했습니다: '+(x.message||x.code||'오류')); return false; }
+}
+// 지운 자료의 파일을 R2 에서 지운다 (운영자만). 실패해도 목록(media_trash)에 남아 다음에 다시 지운다
+async function sweepMedia(){ if(!S.admin||!mediaOn()) return; try{ await store.media('sweep'); }catch(e){ console.warn('사진·영상 정리 실패',e); } }
+// 영상 길이(초). 읽지 못하면 0 — 서버는 길이를 모르므로 막지 않고 운영자 확인에 맡긴다
+function videoSec(file){ return new Promise(res=>{ const v=document.createElement('video'), u=URL.createObjectURL(file); let done=false;
+  const end=s=>{ if(done) return; done=true; URL.revokeObjectURL(u); res(s); };
+  v.preload='metadata'; v.onloadedmetadata=()=>end(isFinite(v.duration)?v.duration:0); v.onerror=()=>end(0); setTimeout(()=>end(0),8000); v.src=u; }); }
+// R2 에 바로 올린다. 서명에 크기·형식이 묶여 있어 다른 파일로는 올라가지 않는다
+async function uploadMedia(file){
+  const r=await store.media('upload',{contentType:file.type,size:file.size});
+  const res=await fetch(r.url,{method:'PUT',headers:{'Content-Type':file.type},body:file}).catch(()=>null);
+  if(!res) throw new Error('저장소에 연결하지 못했습니다. 잠시 후 다시 시도하고, 계속되면 운영자에게 알려 주세요');
+  if(!res.ok) throw new Error('파일을 올리지 못했습니다 (HTTP '+res.status+')');
+  return r.key;
+}
 const aiReady=()=>aiOn()&&S.admin;
 const catsToText=list=>list.map(c=>c.name+(c.subs.length?': '+c.subs.join(', '):'')).join('\n');
 
@@ -1368,7 +1436,7 @@ function row(it,i){
     <div class="row-main">
       <div class="row-title">${hl(it.title||'(제목 없음)')}${it.url?`<span class="host">${esc(srcName(it.url))}</span>`:''}${it.lang?`<span class="host">${esc(it.lang)}</span>`:''}</div>
       ${sub?`<div class="row-sub">${hl(sub)}</div>`:''}
-      <div class="row-meta">${catOfItem(it)?`<span class="chip cat">${esc(catOfItem(it))}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
+      <div class="row-meta">${catOfItem(it)?`<span class="chip cat">${esc(catOfItem(it))}${it.sub?' › '+esc(it.sub):''}</span>`:''}${(it.tags||[]).map(x=>`<span class="chip">#${esc(x)}</span>`).join('')}${cs.slice(0,2).map(c=>`<span class="chip col">▤ ${esc(c.title)}</span>`).join('')}${it.example?'<span class="chip">예시</span>':''}${it.status==='pending'?'<span class="chip warn">승인 대기</span>':''}${rp?`<span class="chip warn">신고 ${rp}</span>`:''}</div>
     </div>
     <div class="row-side">
       <button class="vote${voted?' done':''}" data-vote="${esc(it.id)}" title="추천">▲ <span class="num">${it.votes||0}</span></button>
@@ -1386,10 +1454,17 @@ function detail(it){
   // 링크 없이 저장된 옛 파일 항목. 열 길이 없다는 것을 말해 준다 (지금은 파일도 링크를 받아야 저장된다)
   const url=it.url?`<div class="url" style="margin-top:${body?10:0}px">${su?`<a href="${esc(su)}" target="_blank" rel="noopener">${esc(it.url)}</a>`:`${esc(it.url)} <span class="chip warn">열 수 없는 주소</span>`}</div>`
     :it.type==='file'?`<div class="hint" style="margin-top:${body?10:0}px">이 파일에는 공유 링크가 없어 열 수 없습니다.${own?' 수정에서 링크를 넣어 주세요.':''}</div>`:'';
+  // 사진·영상: 승인됐으면 공개 주소로 바로, 승인 전이면 (올린 사람·운영자에게만 보이는 자료다) 눌러서 본다
+  const mu=it.type==='media'?mediaUrl(it):'', pend=it.type==='media'&&it.status==='pending';
+  const media=it.type!=='media'?'':mu?`<div class="media-box">${mediaTag(it,mu)}</div>`
+    :pend?`<div data-mbox><div class="hint">운영자가 확인하기 전이라 올린 사람과 운영자에게만 보입니다. 7일 안에 승인되지 않으면 지워집니다.</div><p><button type="button" class="btn small" data-mview="${esc(it.id)}">확인용으로 보기</button></p></div>`
+    :`<div class="hint">사진·영상을 표시할 수 없습니다 (저장소 주소가 설정되지 않았습니다).</div>`;
   return `<div class="detail" data-stop>
-    ${body}${url}
+    ${media}${body}${url}
     <div class="actions">
       ${su?`<a class="btn small" href="${esc(su)}" target="_blank" rel="noopener">${it.type==='file'?'파일 열기':'열기'} ↗</a>`:''}
+      ${mu?`<a class="btn small" href="${esc(mu)}" target="_blank" rel="noopener">원본 열기 ↗</a>`:''}
+      ${pend&&S.admin?`<button class="btn small primary" data-approve="${esc(it.id)}">승인</button>`:''}
       ${it.type==='snippet'?`<button class="btn small" data-copy="${esc(it.id)}">코드 복사</button>`:''}
       ${it.url?`<button class="btn small" data-copyurl="${esc(it.id)}" title="자료가 가리키는 바깥 주소를 복사합니다">원본 주소 복사</button>`:''}
       ${linkOn()?`<button class="btn small" data-share="${esc(it.id)}" title="이 자료로 바로 오는 빠른 연결 주소를 복사합니다">링크 복사</button>`:''}
@@ -1412,7 +1487,8 @@ function renderMe(){
 function renderRail(){
   const cnt={all:S.items.length}; S.items.forEach(it=>cnt[it.type]=(cnt[it.type]||0)+1);
   const mineN=loggedIn()?S.items.filter(x=>x.ownerId===ME.id).length:0;
-  $('#typeList').innerHTML=[['all','전체','line2'],...Object.entries(TYPES).map(([k,v])=>[k,v.n,k==='snippet'?'code':k])].map(([k,n,c])=>
+  // 사진·영상은 올릴 수 있거나 이미 있을 때만 줄을 보인다 (설정 전에는 늘 0 인 줄이 된다)
+  $('#typeList').innerHTML=[['all','전체','line2'],...Object.entries(TYPES).filter(([k])=>k!=='media'||mediaOn()||cnt.media).map(([k,v])=>[k,v.n,k==='snippet'?'code':k])].map(([k,n,c])=>
     `<button class="f${S.type===k?' on':''}" data-type="${k}"><span class="lbl"><i class="dot" style="background:var(--${c})"></i>${n}</span><span class="cnt">${cnt[k]||0}</span></button>`).join('')
     +(loggedIn()?`<button class="f${S.mine?' on':''}" data-mine="1" style="margin-top:4px;border-top:1px solid var(--line);border-radius:0 0 6px 6px"><span class="lbl">내 글</span><span class="cnt">${mineN}</span></button>`:'');
   // 분야별 개수는 id 로 센다. 이름을 키로 쓰면 개명 도중 같은 분야가 둘로 갈라져 보인다.
@@ -1462,22 +1538,33 @@ function renderColHead(){
 const urgentRep=rs=>rs.some(r=>URGENT.has(r.reason));
 // 긴급 신고가 있으면 숫자 대신 '긴급 N' 으로 쓴다. 색만 바꾸면 기본 배지와 같은 빨강이라 구분되지 않았다
 function renderReviewBtn(){
-  const b=$('#reviewBtn'), c=$('#reviewCnt'), n=S.reports.length, u=S.reports.filter(r=>URGENT.has(r.reason)).length;
-  b.hidden=!isMod(); c.textContent=u?'긴급 '+u:n; c.classList.toggle('urgent',!!u);
-  const t=u?`신고 검토함 · 긴급 ${u}건 (전체 ${n}건)`:`신고 검토함 · ${n}건`; b.title=t; b.setAttribute('aria-label',t);
+  // 운영자에게는 승인 대기 사진·영상도 센다. 승인 대기는 운영자에게만 보인다(items_select) — 담당자의 수에는 안 든다
+  const b=$('#reviewBtn'), c=$('#reviewCnt'), n=S.reports.length, u=S.reports.filter(r=>URGENT.has(r.reason)).length, p=S.admin?pendingOf().length:0;
+  b.hidden=!isMod(); c.textContent=u?'긴급 '+u:n+p; c.classList.toggle('urgent',!!u);
+  const t=(u?`신고 검토함 · 긴급 ${u}건 (전체 ${n}건)`:`신고 검토함 · ${n}건`)+(p?` · 승인 대기 ${p}건`:''); b.title=t; b.setAttribute('aria-label',t);
+}
+// 승인 대기 사진·영상 (운영자). 신고보다 위에 둔다 — 7일이 지나면 저절로 지워지므로 기다리게 하면 안 된다.
+// 긴급 신고가 있으면 그것이 맨 위다 (아래 renderReview)
+function pendingHTML(){
+  const ps=S.admin?pendingOf().sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))):[];
+  if(!ps.length) return '';
+  return `<h3 class="rv-h">승인 대기 사진·영상 ${ps.length}건</h3><p class="hint">직접 찍었거나 올려도 되는 것인지, 찍힌 사람의 동의가 있어 보이는지, 출처가 있는지 보고 승인해 주세요. 영상은 끝까지 봐 주세요. 거절하면 자료와 파일이 지워집니다.</p><div class="rv">`+ps.map(it=>
+    `<div class="rv-row"><div><div class="row-title">${esc(it.title||'(제목 없음)')}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(catOfItem(it))}${it.mediaType?' · '+esc(it.mediaType):''}</div>${it.body?`<div class="hint">${esc(it.body.slice(0,200))}</div>`:''}
+      <div data-mbox><p><button type="button" class="btn small" data-mview="${esc(it.id)}">확인용으로 보기</button></p></div></div>
+      <div class="acts"><button class="btn small primary" data-approve="${esc(it.id)}">승인</button><button class="btn small danger" data-reject="${esc(it.id)}">거절(삭제)</button></div></div>`).join('')+'</div>';
 }
 function renderReview(){
   const g={}; S.reports.forEach(r=>{ (g[r.itemId]=g[r.itemId]||[]).push(r) });
   // 긴급 사유(불법촬영물 등)가 붙은 자료가 먼저, 그다음 신고가 많은 순
   const ids=Object.keys(g).sort((a,b)=>(urgentRep(g[b])-urgentRep(g[a]))||(g[b].length-g[a].length));
-  const el=$('#review');
-  if(!ids.length){ el.innerHTML=`<div class="rv"><div class="empty"><b>검토할 신고가 없습니다</b>신고가 들어오면 여기에 모입니다.</div></div><p><button class="btn small ghost" data-review-close="1">목록으로</button></p>`; return; }
-  el.innerHTML=`<div class="bar"><div class="status"><b>${ids.length}</b>개 항목에 신고 ${S.reports.length}건</div><button class="btn small ghost" data-review-close="1">목록으로</button></div><div class="rv">`+ids.map(id=>{
+  const el=$('#review'), ph=pendingHTML(), urgent=ids.some(id=>urgentRep(g[id]));
+  if(!ids.length){ el.innerHTML=(ph?`<div class="bar"><div class="status">검토함</div><button class="btn small ghost" data-review-close="1">목록으로</button></div>`+ph:'')+(ph?'':`<div class="rv"><div class="empty"><b>검토할 신고가 없습니다</b>신고가 들어오면 여기에 모입니다.</div></div><p><button class="btn small ghost" data-review-close="1">목록으로</button></p>`); return; }
+  el.innerHTML=`<div class="bar"><div class="status"><b>${ids.length}</b>개 항목에 신고 ${S.reports.length}건</div><button class="btn small ghost" data-review-close="1">목록으로</button></div>`+(urgent?'':ph)+`<div class="rv">`+ids.map(id=>{
     const it=S.items.find(x=>x.id===id); const rs=g[id];
     return `<div class="rv-row"><div>${it?`<div class="row-title">${esc(it.title)}${it.url?`<span class="host">${esc(srcName(it.url))}</span>`:''}</div><div class="hint">${esc(it.by||'')} · ${rel(it.createdAt)} · ${esc(catOfItem(it))}</div>`:'<div class="row-title" style="color:var(--muted)">이미 삭제된 항목</div>'}
       <ul>${rs.map(r=>`<li>${URGENT.has(r.reason)?'<span class="chip urgent">긴급</span> ':''}${esc(REASONS[r.reason]||r.reason)}${r.note?' — '+esc(r.note):''} <span class="hint">(${esc(r.by||'익명')}, ${rel(r.createdAt)})</span></li>`).join('')}</ul></div>
       <div class="acts">${it?`<button class="btn small" data-open="${esc(id)}">보기</button><button class="btn small danger" data-rvdel="${esc(id)}">항목 삭제</button>`:''}<button class="btn small ghost" data-rvclear="${esc(id)}">신고 닫기</button></div></div>`;
-  }).join('')+'</div>';
+  }).join('')+'</div>'+(urgent?ph:'');
 }
 
 /* ================================================================
@@ -1527,7 +1614,10 @@ $('#review').addEventListener('click',async e=>{
   if(e.target.closest('[data-review-close]')){ S.view='list'; render(); return; }
   const o=e.target.closest('[data-open]'); if(o){ S.view='list'; S.sel=o.dataset.open; S.q=''; $('#q').value=''; Object.assign(S,{type:'all',catId:'all',sub:null,tag:null,col:null,mine:false}); render(); return; }
   const d=e.target.closest('[data-rvdel]'); if(d){ const it=S.items.find(x=>x.id===d.dataset.rvdel); if(it&&await del(it.id,true)) await clearReports(it.id); return; }
-  const c=e.target.closest('[data-rvclear]'); if(c){ await clearReports(c.dataset.rvclear); toast('신고를 닫았습니다'); }
+  const c=e.target.closest('[data-rvclear]'); if(c){ await clearReports(c.dataset.rvclear); toast('신고를 닫았습니다'); return; }
+  const mv=e.target.closest('[data-mview]'); if(mv) return mediaPreview(mv);
+  const ap=e.target.closest('[data-approve]'); if(ap){ ap.disabled=true; if(!await approveMedia(ap.dataset.approve)) ap.disabled=false; return; }
+  const rj=e.target.closest('[data-reject]'); if(rj){ await del(rj.dataset.reject); }
 });
 $('#list').addEventListener('click',async e=>{
   if(e.target.closest('[data-colretry]')) return retryCols();
@@ -1539,6 +1629,8 @@ $('#list').addEventListener('click',async e=>{
   const dl=e.target.closest('[data-del]'); if(dl) return del(dl.dataset.del);
   const rp=e.target.closest('[data-report]'); if(rp) return openReportForm(byId(rp.dataset.report));
   const tc=e.target.closest('[data-tocol]'); if(tc) return openPicker(byId(tc.dataset.tocol));
+  const mv=e.target.closest('[data-mview]'); if(mv) return mediaPreview(mv);
+  const ap=e.target.closest('[data-approve]'); if(ap){ ap.disabled=true; if(!await approveMedia(ap.dataset.approve)) ap.disabled=false; return; }
   if(e.target.closest('[data-stop]')||e.target.closest('a')) return;
   const r=e.target.closest('.row'); if(!r) return;
   S.sel=S.sel===r.dataset.id?null:r.dataset.id; S.cursor=+r.dataset.i; render();
@@ -1579,7 +1671,8 @@ applyScreen();
 
 $('#addBtn').addEventListener('click',()=>openForm(null));
 $('#moreBtn').addEventListener('click',openMore);
-$('#reviewBtn').addEventListener('click',()=>{ S.view=S.view==='review'?'list':'review'; render(); });
+// 운영자가 검토함을 열 때 지운 자료의 파일을 R2 에서 치운다 (올린 사람이 지운 것은 여기서 지워진다)
+$('#reviewBtn').addEventListener('click',()=>{ S.view=S.view==='review'?'list':'review'; render(); if(S.view==='review') sweepMedia(); });
 document.addEventListener('keydown',e=>{
   if(e.isComposing||e.keyCode===229) return;                                 // 한글 조합 중(IME)에는 단축키를 잡지 않는다
   const inField=/input|textarea|select/i.test(e.target.tagName);
@@ -1615,6 +1708,7 @@ async function del(id,quiet){
   if(!confirm(`"${it.title}" 항목을 삭제할까요? 되돌릴 수 없습니다.`)) return false;
   try{
     await store.remove(id); if(S.sel===id) S.sel=null;
+    if(it.mediaKey) sweepMedia();   // 파일은 트리거가 media_trash 에 넣어 둔다. 운영자면 바로 R2 에서 지운다
     for(const c of colsOf(id)) if(canEdit(c)) await store.putCol({...c,itemIds:c.itemIds.filter(x=>x!==id)});
     if(!quiet) toast('삭제했습니다'); return true;
   }catch(e){ toast('삭제하지 못했습니다 ('+(e.code||'오류')+')'); return false; }
@@ -1714,8 +1808,10 @@ async function openForm(it){
   // 기본 분야는 지금 보고 있는 분야. '분야 없음' 자리는 고를 값이 아니므로 첫 분야로 떨어뜨린다.
   const preCat=(S.catId!=='all'&&S.catId!==NOCAT&&catOf(S.catId))?S.catId:((S.cats[0]||{}).id||'');
   const d=it||{type:'link',title:'',url:'',body:'',lang:'',categoryId:preCat,category:catName(preCat),sub:S.sub||'',tags:[]};
+  // 사진·영상은 다른 종류와 서로 바꿀 수 없다 (DB 의 items_media_pair). 새로 올릴 때만 고를 수 있고, 고칠 때는 그 종류로 잠근다
+  const typeList=Object.entries(TYPES).filter(([k])=>edit?(d.type==='media')===(k==='media'):(k!=='media'||mediaOn()));
   modal(`${mh(edit?'항목 수정':'새 항목')}<form id="form" autocomplete="off"><div class="modal-b">
-      <div class="types" id="types">${Object.entries(TYPES).map(([k,v])=>`<button type="button" data-t="${k}" class="${d.type===k?'on':''}"><span class="k" style="color:var(--${k==='snippet'?'code':k})">${v.k}</span><small>${v.n}</small></button>`).join('')}</div>
+      <div class="types" id="types">${typeList.map(([k,v])=>`<button type="button" data-t="${k}" class="${d.type===k?'on':''}"><span class="k" style="color:var(--${k==='snippet'?'code':k})">${v.k}</span><small>${v.n}</small></button>`).join('')}</div>
       <label class="fld" id="fUrl"><span id="urlLabel">주소 (URL)</span><input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://" value="${esc(d.url)}" aria-describedby="urlHint err"></label>
       <div class="hint url-hint" id="urlHint" aria-live="polite"></div>
       <div class="filenote" id="fFile" hidden>이 사이트는 파일을 <b>보관하지 않습니다.</b> 구글 드라이브 같은 곳에 파일을 올린 뒤, <b>누구나 열 수 있게 공유한 링크</b>를 위 칸에 넣어 주세요.
@@ -1725,6 +1821,10 @@ async function openForm(it){
           <li><b>드롭박스</b>: 파일에서 [공유] → 접근 범위가 <b>링크가 있는 모든 사용자</b>인지 보고 → [링크 복사]</li>
           <li><b>네이버 MYBOX</b>: 파일을 오른쪽 클릭 → [링크 공유] → 만들어진 링크 복사</li>
         </ol>확인하는 법: 링크를 브라우저의 <b>시크릿 창</b>(로그인하지 않은 창)에 붙여 넣어 보세요. 거기서 열리면 다른 사람도 열 수 있습니다.</details></div>
+      <div id="fMedia" hidden>${edit?`<div class="filenote">사진·영상 파일은 바꿀 수 없습니다. 다른 파일로 바꾸려면 이 항목을 지우고 새로 올려 주세요.</div>`
+        :`<label class="fld">사진·영상 파일<input name="media" type="file" accept="${Object.keys(MEDIA_TYPES).join(',')}"></label>
+        <div class="filenote" style="margin-top:6px">운영자가 확인한 뒤에 공개됩니다. 그 전에는 나와 운영자에게만 보이고, 7일 안에 승인되지 않으면 지워집니다.
+          사진 10MB(jpg·png·webp·gif), 영상 50MB·1분(mp4·webm)까지.<br><b>직접 찍었거나 올려도 되는 것만</b> 올려 주세요. 찍힌 사람이 동의하지 않은 사진·영상, 남의 저작물은 승인하지 않습니다.</div>`}</div>
       <label class="fld">제목<input name="title" required placeholder="한눈에 알아볼 이름" value="${esc(d.title)}"></label>
       <label class="fld" id="fLang"><span id="langLabel">언어 / 형식</span><input name="lang" placeholder="bash, python, json, pdf ..." value="${esc(d.lang||'')}"></label>
       <label class="fld" id="fBody"><span id="bodyLabel">설명</span><textarea name="body">${esc(d.body)}</textarea></label>
@@ -1755,17 +1855,17 @@ async function openForm(it){
   }
   function applyType(){
     $('#types').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===type));
-    const noUrl=type==='note'||type==='snippet', isFile=type==='file';
+    const noUrl=noUrlType(type), isFile=type==='file';
     $('#fUrl').hidden=noUrl; form.url.disabled=noUrl;   // 숨긴 칸은 끈다. 저장할 때도 주소를 비워 보낸다
-    $('#fFile').hidden=!isFile;
+    $('#fFile').hidden=!isFile; $('#fMedia').hidden=type!=='media';
     $('#urlLabel').textContent=isFile?'파일 공유 링크':'주소 (URL)';
     form.url.placeholder=isFile?'https://drive.google.com/file/d/…':'https://';
     form.url.setAttribute('aria-required',String(!noUrl));   // 필수 검사는 submit 이 한다 (브라우저 말풍선 대신 이유를 말한다)
-    $('#fLang').hidden=type==='link'||type==='note';
+    $('#fLang').hidden=type==='link'||type==='note'||type==='media';
     $('#langLabel').textContent=isFile?'파일 형식':'언어 / 형식';
     form.body.classList.toggle('code',type==='snippet');
-    $('#bodyLabel').textContent={link:'한 줄 설명',note:'내용',snippet:'코드',file:'설명'}[type];
-    form.body.placeholder={link:'왜 저장했는지, 언제 쓰는지 한 줄',note:'정리한 내용을 자유롭게',snippet:'붙여넣기',file:'무슨 파일인지, 언제 쓰는지'}[type];
+    $('#bodyLabel').textContent={link:'한 줄 설명',note:'내용',snippet:'코드',file:'설명',media:'설명'}[type];
+    form.body.placeholder={link:'왜 저장했는지, 언제 쓰는지 한 줄',note:'정리한 내용을 자유롭게',snippet:'붙여넣기',file:'무슨 파일인지, 언제 쓰는지',media:'무엇을 찍은 것인지, 어디서 났는지'}[type];
     form.lang.placeholder=isFile?'pdf, xlsx, 문서 ...':'bash, python, json ...';
     // 링크일 때 주소에서 채운 제목('drive.google.com')은 다른 종류로 바꾸면 거둔다. 파일 제목으로는 무슨 파일인지 모른다
     if(type!=='link'&&autoTitle&&form.title.value===autoTitle) form.title.value='';
@@ -1784,7 +1884,7 @@ async function openForm(it){
   });
   const aiBtn=$('#aiBtn'); if(aiBtn) aiBtn.addEventListener('click',async()=>{
     const f=form, msg=$('#aiMsg');
-    const item={type,title:f.title.value.trim(),url:(type==='note'||type==='snippet')?'':fixUrl(f.url.value),lang:f.lang.value.trim(),body:f.body.value.trim(),categoryId:f.category.value,category:catName(f.category.value),sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
+    const item={type,title:f.title.value.trim(),url:noUrlType(type)?'':fixUrl(f.url.value),lang:f.lang.value.trim(),body:f.body.value.trim(),categoryId:f.category.value,category:catName(f.category.value),sub:f.sub.value.trim(),tags:f.tags.value.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean)};
     if(!(item.title||item.url||item.body)){ msg.textContent='제목, 주소, 내용 중 하나는 먼저 적어 주세요.'; return; }
     aiBtn.disabled=true; msg.textContent='AI 가 살펴보는 중…';
     try{
@@ -1806,7 +1906,7 @@ async function openForm(it){
     fillFmt();   // 주소 칸을 떠나지 않고 Enter 로 저장한 경우
     const item={
       id:edit?d.id:uid(), type, title:f.title.value.trim(),
-      url:(type==='note'||type==='snippet')?'':fixUrl(f.url.value),
+      url:noUrlType(type)?'':fixUrl(f.url.value),
       lang:(type==='snippet'||type==='file')?f.lang.value.trim():'',
       body:f.body.value.replace(/\s+$/,''),
       categoryId:f.category.value,
@@ -1828,17 +1928,30 @@ async function openForm(it){
       const m=urlProblem(item.url,type), same=edit&&type===d.type&&item.url===fixUrl(d.url);
       if(m&&!same){ err.textContent=m; f.url.setAttribute('aria-invalid','true'); f.url.focus(); return; } }
     if(type==='snippet'&&!item.body){ err.textContent='코드를 붙여넣어 주세요.'; return; }
-    f.querySelector('[type=submit]').disabled=true;
+    // 사진·영상: 올리기 전에 형식·크기·길이를 본다. 서버도 형식·크기를 다시 보지만, 다 올린 뒤에 거절당하면 기다린 시간이 아깝다
+    const file=type==='media'&&!edit?(f.media.files||[])[0]:null;
+    if(type==='media'&&!edit){
+      if(!file){ err.textContent='올릴 사진이나 영상을 골라 주세요.'; return; }
+      const mb=MEDIA_TYPES[file.type];
+      if(!mb){ err.textContent='jpg·png·webp·gif 사진이나 mp4·webm 영상만 올릴 수 있습니다'+(/heic|heif|quicktime/i.test(file.type)?' (아이폰 사진·영상은 공유 → "옵션" 에서 호환 형식으로 바꿔 주세요)':'')+'.'; return; }
+      if(file.size>mb*1024*1024){ err.textContent=`파일이 너무 큽니다. ${/^video/.test(file.type)?'영상':'사진'}은 ${mb}MB 까지입니다.`; return; }
+      if(/^video/.test(file.type)&&await videoSec(file)>MEDIA_SEC+1){ err.textContent=`영상은 ${MEDIA_SEC}초까지입니다. 잘라서 올려 주세요.`; return; }
+    }
+    const sbtn=f.querySelector('[type=submit]'); sbtn.disabled=true;
     try{
+      if(file){ sbtn.textContent='올리는 중…'; item.mediaKey=await uploadMedia(file); }
       await store.put(item);
       if(S.admin&&item.sub&&item.categoryId){ const c=catOf(item.categoryId); if(c&&!c.subs.includes(item.sub)) await store.saveCategories(S.cats.map(x=>x.id===c.id?{...x,subs:[...x.subs,item.sub]}:x)); }
-      closeModal(); S.sel=item.id; S.view='list'; toast(edit?'저장했습니다':'추가했습니다'); render();
+      // 운영자가 올린 것도 승인(크기·형식 확인, 공개 버킷으로 옮기기)을 거쳐야 공개 주소가 생긴다. 바로 부른다
+      let msg=edit?'저장했습니다':'추가했습니다';
+      if(file) msg=S.admin?(await approveMedia(item.id,true)?'올리고 승인했습니다':'올렸습니다. 검토함에서 다시 승인해 주세요'):'올렸습니다. 운영자가 확인하면 공개됩니다';
+      closeModal(); S.sel=item.id; S.view='list'; toast(msg); render();
     }catch(x){
-      f.querySelector('[type=submit]').disabled=false;
+      sbtn.disabled=false; sbtn.textContent=edit?'저장':'추가';
       err.textContent='저장하지 못했습니다 ('+(x.message||x.code||'오류')+')';
     }
   });
-  setTimeout(()=>{ (type==='note'||type==='snippet'?form.title:form.url).focus(); },0);
+  setTimeout(()=>{ (noUrlType(type)?form.title:form.url).focus(); },0);
 }
 
 async function openColForm(c){
@@ -2603,6 +2716,9 @@ function openIO(){
         if(!cid&&(raw.category||raw.categoryId)) noCat++;
         // 이름 사본도 id 에서 끌어낸다. 파일에 남아 있던 낡은 이름을 그대로 실으면 어긋난 채로 굳는다.
         const cname=cid?(catName(cid)||String(raw.category||'')):(String(raw.category||'')||(ex?ex.category:'')||'');
+        // 사진·영상은 파일이 JSON 에 함께 오지 않는다. 새로 만들 수 없으니 건너뛴다 (이미 있는 것은 글만 고친다)
+        if(raw.type==='media'&&!ex){ fail++; if(!why) why='사진·영상은 파일이 함께 오지 않아 가져올 수 없습니다'; continue; }
+        if(ex&&(ex.type==='media')!==(raw.type==='media')){ fail++; if(!why) why='사진·영상과 다른 종류는 서로 바꿀 수 없습니다'; continue; }
         const it={id:rid,type:TYPES[raw.type]?raw.type:'link',title:String(raw.title||raw.url||'(제목 없음)'),url:String(raw.url||''),lang:String(raw.lang||''),body:String(raw.body||''),category:cname,categoryId:cid,sub:String(raw.sub||''),tags:Array.isArray(raw.tags)?raw.tags.map(String):[],
           // 이미 있는 항목은 올린 사람·소유자·수정시각을 그대로 둔다 (백업 복원 시 소유권이 넘어가지 않게)
           by:ex?ex.by:String(raw.by||ME.name),ownerId:ex?ex.ownerId:ME.id,createdAt:ex?ex.createdAt:(raw.createdAt||new Date().toISOString()),updatedAt:ex?ex.updatedAt:(raw.updatedAt||null)};

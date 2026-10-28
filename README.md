@@ -18,6 +18,7 @@
 | `supabase/seed-4.sql` | **유머** 분야 추가 + 자료 12개. SQL Editor 용 |
 | `supabase/seed-4.json` | 위와 같은 내용. JSON 가져오기 용 (운영자로 실행하면 분야도 함께 추가) |
 | `supabase/functions/ai/index.ts` | **서비스 안 AI 에이전트** (Supabase Edge Function). 올릴 때 분류 제안, 운영자용 재분류·분야 구조 제안·자료 채우기. 링크 생존·중복·위험 명령 검증도 여기서. Claude API 키는 여기서만 쓰임 |
+| `supabase/functions/media/index.ts` | **사진·영상 올리기·승인** (Supabase Edge Function). Cloudflare R2 업로드 주소 서명, 승인 때 공개 버킷으로 옮기기, 지운 자료의 파일 정리. R2 키는 여기서만 쓰임 |
 | `supabase/config.toml` | Supabase CLI 설정 (Edge Function 배포용) |
 | `supabase/delete-user.sql` | **탈퇴(계정 삭제) 요청 처리**. SQL Editor 용. 대시보드에서 사용자를 바로 지우면 그 사람의 자료·신고를 더는 못 찾으므로 이 파일로 순서대로 정리한다 |
 | `.github/workflows/keepalive.yml` | Supabase 무료 프로젝트가 멈추지 않게 하루 두 번 DB 에 가벼운 질의를 건다 (GitHub Actions, 비밀 값 불필요) |
@@ -169,6 +170,33 @@ update public.profiles set is_admin = true
 3. `config.js` 의 `AI` 가 `true` 인지 확인 (기본값). 사이트를 새로고침하면 새 항목 창에 **✦ AI 분류 제안** 버튼이 보입니다. 끄려면 `AI: false`.
 
 함수 코드를 고친 뒤에는 `npx supabase functions deploy ai` 만 다시 실행하면 됩니다. 로그는 Supabase 대시보드 **Edge Functions → ai → Logs** 에서 봅니다.
+
+### 8. 사진·영상 올리기 켜기 (선택, 약 20분)
+
+이 사이트가 **직접 보관하는 유일한 파일**입니다. 다른 파일은 여전히 공유 링크로 받습니다.
+누구나 올릴 수 있지만 **운영자가 승인해야 공개**됩니다. 승인 전에는 올린 사람과 운영자에게만 보이고, 7일 안에 승인되지 않으면 지워집니다.
+사진 10MB(jpg·png·webp·gif), 영상 50MB·1분(mp4·webm)까지. 한 사람이 하루 20개, 승인 대기는 10개까지입니다.
+
+파일은 Supabase 가 아니라 **Cloudflare R2** 에 둡니다. Supabase Storage 는 DB·로그인과 한도를 함께 써서, 넘치면 사이트 전체가 읽기 전용이 됩니다.
+R2 는 무료 10GB, 내려받기 전송료가 없습니다.
+
+1. Cloudflare 가입 → **R2** 켜기 (결제 수단 등록이 필요하지만 무료 한도 안에서는 청구되지 않습니다)
+2. 버킷 둘을 만듭니다
+   - `quickref-pending` — 승인 전. **공개하지 않습니다.**
+     - Settings → **CORS policy** 에 아래를 넣습니다 (브라우저가 여기로 바로 올립니다)
+       ```json
+       [{"AllowedOrigins":["https://my-web-imperialpapas-projects.vercel.app"],"AllowedMethods":["PUT","GET"],"AllowedHeaders":["content-type"],"MaxAgeSeconds":3600}]
+       ```
+     - Settings → **Object lifecycle rules** 에 "8일 뒤 삭제" 규칙을 하나 둡니다 (올리다 만 파일, 거절된 파일의 마지막 그물)
+   - `quickref-media` — 승인 뒤. Settings → **Public access** 에서 r2.dev 주소를 켭니다 (나중에 도메인을 붙이면 그 주소로)
+3. R2 → **Manage API tokens** → 토큰 만들기: 권한 **Object Read & Write**, 버킷은 위 두 개만
+4. Supabase 대시보드 → Edge Functions → **Secrets** 에 넣습니다 (키를 채팅이나 저장소에 붙이지 마세요)
+   `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. 버킷 이름을 바꿨다면 `R2_PENDING_BUCKET`, `R2_PUBLIC_BUCKET` 도
+5. SQL Editor 에서 `supabase/schema.sql` 전체를 다시 실행 → `npx supabase functions deploy media`
+6. `config.js` 의 `MEDIA_BASE` 에 공개 버킷 주소(`https://pub-….r2.dev`)를 넣고 푸시
+
+승인은 **검토함**에서 합니다. 운영자가 올린 것은 올리자마자 자동으로 승인됩니다.
+지운 자료의 파일은 바로 지워지지 않고 목록에 쌓였다가, **운영자가 검토함을 열거나 자료를 지울 때** R2 에서 지워집니다.
 
 ## 분야 주 관리자
 

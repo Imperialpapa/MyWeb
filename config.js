@@ -25,4 +25,8 @@ window.TOOLBOX_CONFIG = {
   // 회사·개인 메일 말고 이 용도로 따로 만든 주소를 넣으세요. 예: "report@example.com"
   // 채우기 **전에** privacy.html 의 2장 2·3장 "권리 침해 신고 메일" 줄을 확정하세요 (메일로 이름·연락처·근거 자료를 받게 됩니다).
   REPORT_EMAIL: "",
+  // 사진·영상 직접 올리기. Cloudflare R2 **공개 버킷의 주소**를 넣으면 켜집니다. 예: "https://pub-xxxx.r2.dev"
+  // supabase/functions/media 를 배포하고 R2 비밀 값을 등록해야 동작합니다 (README "사진·영상"). 비워 두면 꺼집니다.
+  // 올린 사진·영상은 운영자가 승인해야 공개됩니다.
+  MEDIA_BASE: "",
 };

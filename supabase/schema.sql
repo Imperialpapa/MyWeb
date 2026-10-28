@@ -74,6 +74,30 @@ alter table public.items add  constraint items_category_id_fmt
   check (category_id is null or category_id ~ '^[A-Za-z0-9_-]{1,64}$');
 create index if not exists items_category_id_idx on public.items (category_id, sub);
 
+-- ---------- 사진·영상 (2026-10-28) ----------
+-- 파일 자체는 Cloudflare R2 에 있고 여기에는 열쇠(media_key)만 둔다. Supabase Storage 를 쓰지 않는 이유는
+-- 저장·전송 한도를 DB·로그인과 함께 써서, 넘치면 사이트 전체가 읽기 전용(402)이 되기 때문이다 (todo.md).
+-- status: pending 은 운영자 승인 전이다. 올린 사람과 운영자만 보고(items_select), 파일은 비공개 버킷에 있다.
+--         승인하면 media 함수가 공개 버킷으로 옮기고 media_approve 로 approved 를 찍는다. 거절은 자료 삭제다.
+-- 세 컬럼은 화면이 고칠 수 없다(아래 grant update 목록에 없다). 새 자료의 값은 items_media_guard 트리거가 정한다.
+-- **이 컬럼들은 아래 RLS 정책보다 위에 있어야 한다.** 정책이 status 를 읽는다.
+alter table public.items add column if not exists status text not null default 'approved';
+alter table public.items add column if not exists media_key text;
+alter table public.items add column if not exists media_type text;
+alter table public.items drop constraint if exists items_type_check;
+alter table public.items add  constraint items_type_check check (type in ('link','note','snippet','file','media'));
+alter table public.items drop constraint if exists items_status_chk;
+alter table public.items add  constraint items_status_chk check (status in ('pending','approved'));
+-- 열쇠 모양은 media_begin 이 만드는 것만. 공개 주소에 그대로 붙으므로 계정 id 같은 것은 넣지 않는다
+alter table public.items drop constraint if exists items_media_chk;
+alter table public.items add  constraint items_media_chk check (
+  media_key is null or media_key ~ '^m/[0-9a-f]{32}\.(jpg|png|webp|gif|mp4|webm)$');
+-- 사진·영상 자료에는 파일이 꼭 있고, 다른 종류에는 없다. 그래서 사진·영상을 수정에서 다른 종류로 바꿀 수 없다
+-- (바꾸면 파일만 남은 링크가 된다). 바꾸려면 지우고 다시 올린다
+alter table public.items drop constraint if exists items_media_pair;
+alter table public.items add  constraint items_media_pair check ((type = 'media') = (media_key is not null));
+create index if not exists items_pending_idx on public.items (status) where status = 'pending';
+
 create index if not exists items_created_idx on public.items (created_at desc);
 -- 지금은 브라우저가 items 를 통째로 받아 메모리에서 거르므로 이 인덱스를 타는 질의가 없다.
 -- 자료가 많아져 "오래 확인 안 한 것" 을 서버에서 골라 오게 되면 그때 쓰인다.
@@ -318,7 +342,9 @@ create policy profiles_update on public.profiles for update using (id = auth.uid
 
 -- items
 drop policy if exists items_select on public.items;
-create policy items_select on public.items for select using (true);
+-- 승인 전 사진·영상은 올린 사람과 운영자만 본다. 분야 담당자는 승인하지 않으므로 보지 않는다
+create policy items_select on public.items for select
+  using (status = 'approved' or owner_id = auth.uid() or public.is_admin());
 drop policy if exists items_insert on public.items;
 create policy items_insert on public.items for insert to authenticated with check (owner_id = auth.uid());
 drop policy if exists items_update on public.items;
@@ -766,6 +792,129 @@ create trigger reports_author_name
 alter table public.profiles drop constraint if exists profiles_name_len;
 alter table public.profiles add  constraint profiles_name_len check (length(name) <= 40) not valid;
 
+-- ---------- 사진·영상 올리기와 승인 ----------
+-- 순서: media 함수가 media_begin 으로 열쇠를 받아 R2 업로드 주소를 서명해 준다 → 브라우저가 R2 에 바로 올린다
+--       → 브라우저가 그 열쇠를 실어 자료를 insert 한다 → items_media_guard 가 "내가 받은 열쇠인가" 를 보고 pending 을 찍는다
+--       → 운영자가 승인하면 media 함수가 파일 크기·형식을 다시 보고 공개 버킷으로 옮긴 뒤 media_approve 를 부른다.
+-- 크기·형식 상한은 여기(media_begin)가 정본이다. R2 서명에 정확한 크기가 들어가 그보다 큰 파일은 R2 가 거절한다.
+-- media 함수의 MEDIA_LIMIT 도 같은 값이어야 한다 (승인 때 다시 본다).
+create table if not exists public.media_uploads (
+  key text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  content_type text not null,
+  size bigint not null,
+  used boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists media_uploads_user_idx on public.media_uploads (user_id, created_at);
+alter table public.media_uploads enable row level security;   -- 정책 없음 = 아래 함수로만 다룬다
+
+-- 열쇠 하나를 발급한다. 하루 올리기 횟수와 승인 대기 수를 여기서 막는다
+-- (R2 에 올라간 파일은 우리 돈이다. 막지 않으면 로그인한 누구나 10GB 무료 한도를 하루에 채울 수 있다).
+create or replace function public.media_begin(ct text, sz bigint)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_me uuid := auth.uid(); v_ext text; v_max bigint; v_key text; v_admin boolean := public.is_admin();
+begin
+  if v_me is null then raise exception '로그인이 필요합니다'; end if;
+  v_ext := case ct when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp' when 'image/gif' then 'gif'
+                   when 'video/mp4' then 'mp4' when 'video/webm' then 'webm' end;
+  if v_ext is null then raise exception '사진(jpg·png·webp·gif)이나 영상(mp4·webm)만 올릴 수 있습니다'; end if;
+  v_max := case when ct like 'video/%' then 50 * 1024 * 1024 else 10 * 1024 * 1024 end;
+  if sz is null or sz <= 0 then raise exception '빈 파일입니다'; end if;
+  if sz > v_max then raise exception '파일이 너무 큽니다 (사진 10MB, 영상 50MB 까지)'; end if;
+  if (select count(*) from public.media_uploads where user_id = v_me and created_at > now() - interval '1 day')
+     >= case when v_admin then 200 else 20 end then
+    raise exception '오늘은 더 올릴 수 없습니다. 내일 다시 시도해 주세요';
+  end if;
+  if not v_admin and (select count(*) from public.items where owner_id = v_me and status = 'pending') >= 10 then
+    raise exception '승인을 기다리는 사진·영상이 10개입니다. 운영자가 확인한 뒤에 더 올려 주세요';
+  end if;
+  v_key := 'm/' || replace(gen_random_uuid()::text, '-', '') || '.' || v_ext;
+  insert into public.media_uploads (key, user_id, content_type, size) values (v_key, v_me, ct, sz);
+  return v_key;
+end $$;
+revoke all on function public.media_begin(text, bigint) from public, anon;
+grant execute on function public.media_begin(text, bigint) to authenticated;
+
+-- 새 자료의 status·media_* 는 서버가 정한다. 화면이 approved 를 실어 보내도, 남의 열쇠를 실어 보내도 통하지 않는다.
+-- 운영자가 올린 것도 pending 으로 들어간다 — 승인(파일 크기·형식 확인, 공개 버킷으로 옮기기)을 거쳐야 공개 주소가 생긴다.
+-- 화면은 운영자가 올리면 곧바로 승인을 부른다.
+-- 로그인 맥락이 없으면(SQL Editor, seed) 손대지 않는다. 고칠 때는 컬럼 권한이 막으므로 insert 만 본다.
+create or replace function public.guard_item_media()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_ct text;
+begin
+  if auth.uid() is null then return new; end if;
+  if new.media_key is null then
+    new.status := 'approved'; new.media_type := null;
+    return new;
+  end if;
+  update public.media_uploads set used = true
+   where key = new.media_key and user_id = auth.uid() and not used
+   returning content_type into v_ct;
+  if v_ct is null then raise exception '올린 파일을 찾지 못했습니다. 파일을 다시 골라 주세요'; end if;
+  new.status := 'pending'; new.media_type := v_ct;
+  return new;
+end $$;
+drop trigger if exists items_media_guard on public.items;
+create trigger items_media_guard
+  before insert on public.items for each row execute function public.guard_item_media();
+
+-- 승인. media 함수가 파일을 공개 버킷으로 옮긴 **뒤에** 부른다 (먼저 찍으면 공개 주소가 한동안 빈 파일을 가리킨다)
+create or replace function public.media_approve(iid text)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception '운영자만 승인할 수 있습니다'; end if;
+  update public.items set status = 'approved' where id = iid and status = 'pending' and media_key is not null;
+  return found;
+end $$;
+revoke all on function public.media_approve(text) from public, anon;
+grant execute on function public.media_approve(text) to authenticated;
+
+-- 지운 자료의 파일은 여기 쌓였다가 media 함수(sweep)가 R2 에서 지운다. DB 는 R2 를 직접 부를 수 없다.
+-- 자료를 지우는 길이 여럿(화면, 검토함, delete-user.sql, 매일 정리)이라 트리거로 받는다.
+-- sweep 은 운영자만 돈다(운영자가 검토함을 열 때, 승인·삭제할 때). 그래서 올린 사람이 지운 공개 파일은 그때까지 주소로 열린다.
+create table if not exists public.media_trash (
+  bucket text not null check (bucket in ('pending','approved')),
+  key text not null,
+  created_at timestamptz not null default now(),
+  primary key (bucket, key)
+);
+alter table public.media_trash enable row level security;
+create or replace function public.trash_item_media()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if old.media_key is not null then
+    insert into public.media_trash (bucket, key) values (old.status, old.media_key) on conflict do nothing;
+  end if;
+  return old;
+end $$;
+drop trigger if exists items_media_trash on public.items;
+create trigger items_media_trash
+  after delete on public.items for each row execute function public.trash_item_media();
+
+create or replace function public.media_trash_take(lim integer default 50)
+returns table (bucket text, key text) language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception '운영자만 쓸 수 있습니다'; end if;
+  return query select t.bucket, t.key from public.media_trash t order by t.created_at
+    limit greatest(1, least(coalesce(lim, 50), 200));
+end $$;
+revoke all on function public.media_trash_take(integer) from public, anon;
+grant execute on function public.media_trash_take(integer) to authenticated;
+-- R2 에서 지운 것만 부른다. 지우지 못한 것을 여기서 빼면 그 파일은 영영 남는다
+create or replace function public.media_trash_done(b text, keys text[])
+returns integer language plpgsql security definer set search_path = public as $$
+declare n integer;
+begin
+  if not public.is_admin() then raise exception '운영자만 쓸 수 있습니다'; end if;
+  delete from public.media_trash where bucket = b and key = any(keys);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+revoke all on function public.media_trash_done(text, text[]) from public, anon;
+grant execute on function public.media_trash_done(text, text[]) to authenticated;
+
 -- ---------- 실시간 반영 ----------
 do $$
 begin
@@ -792,6 +941,10 @@ end $$;
 --   (2) 한 번도 로그인하지 않은 계정: 이메일 코드를 요청하는 순간(코드를 확인하기 전에) 계정 행이 생긴다. 남의 주소를 적었을 수도 있다.
 --       코드는 1시간 유효하므로 1일이 지나도 로그인한 적이 없으면 지운다.
 --       로그인 없이는 글·추천·신고를 못 해서 딸린 것이 있을 수 없지만, 무엇이든 딸려 있으면 손대지 않는다.
+--   (3) 7일 동안 승인되지 않은 사진·영상은 자료째 지운다 (파일은 items_media_trash 가 받아 sweep 이 지운다).
+--       기준 시각은 media_uploads.created_at 이다. items.created_at 은 화면이 보내는 값이라 미래로 적어 버틸 수 있다.
+--       R2 비공개 버킷의 수명 규칙(8일)이 그 뒤에 남은 파일을 지운다 — 열쇠만 받고 자료를 안 만든 업로드도 거기서 지워진다.
+--   (4) 올리기 기록은 하루 횟수를 세는 데만 쓴다. 승인 대기 중인 것만 빼고 30일이 지나면 지운다.
 -- 같은 이름으로 다시 등록하면 덮어쓴다(재실행 안전). pg_cron 시각은 UTC — 19:07 은 한국 시간 새벽 4시 7분.
 -- 확인: select jobname, schedule, active from cron.job;   실행 기록: select * from cron.job_run_details order by start_time desc limit 5;
 create extension if not exists pg_cron;
@@ -805,6 +958,13 @@ select cron.schedule('daily-privacy-cleanup', '7 19 * * *', $job$
      and not exists (select 1 from public.reports     where reporter_id = u.id)
      and not exists (select 1 from public.votes       where user_id     = u.id)
      and not exists (select 1 from public.profiles p  where p.id = u.id and (p.is_admin or p.name <> ''));
+  delete from public.items i
+   where i.status = 'pending'
+     -- 기록이 아예 없는 것(올린 사람이 탈퇴해 cascade 로 지워짐)도 함께 지운다
+     and not exists (select 1 from public.media_uploads m where m.key = i.media_key and m.created_at >= now() - interval '7 days');
+  delete from public.media_uploads m
+   where m.created_at < now() - interval '30 days'
+     and not exists (select 1 from public.items i where i.media_key = m.key and i.status = 'pending');
 $job$);
 
 -- ============================================================

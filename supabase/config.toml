@@ -12,3 +12,7 @@ project_id = "toolbox"
 # - 대가: 로그인 안 한 요청도 함수까지 와서 호출 횟수로 잡힌다. 그래서 함수는 네트워크를 쓰기 전에 먼저 거른다.
 # - 대시보드 토글이나 다른 도구로 배포하면 다시 켜질 수 있다. 배포 뒤 Edge Functions → ai 에서 꺼져 있는지 볼 것.
 verify_jwt = false
+
+[functions.media]
+# ai 와 같은 이유로 false. 함수가 요청마다 로그인을 직접 확인한다 (media/index.ts)
+verify_jwt = false

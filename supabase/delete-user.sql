@@ -67,6 +67,12 @@ begin
   get diagnostics v_n = row_count;
   insert into delete_user_result values ('운영자 소개 owner 해제 (settings 행)', v_n);
 
+  -- (2-0) 승인 전 사진·영상은 남길지와 상관없이 지운다. 아무도 확인하지 않은 파일이고, 올린 사람이 없으면 승인할 근거도 없다.
+  --       파일은 media_trash 에 쌓인다 → 실행 뒤 운영자로 사이트의 검토함을 한 번 열면 R2 에서 지워진다
+  delete from public.items where owner_id = v_uid and status = 'pending';
+  get diagnostics v_n = row_count;
+  insert into delete_user_result values ('승인 전 사진·영상 삭제', v_n);
+
   -- (2) 올린 자료·모음. updated_at 은 건드리지 않는다 — 이름을 가린 것이 "수정" 은 아니다
   if v_delete_posts then
     delete from public.collections where owner_id = v_uid;
