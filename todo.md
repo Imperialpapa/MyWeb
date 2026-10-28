@@ -28,7 +28,9 @@
   - delete-user.sql: 승인 전 사진·영상은 남길지와 상관없이 지운다
   **진행 (2026-10-28 쉬는 시점)**: 브랜치 `media-upload` (main 에 아직 안 합침). Cloudflare 버킷 둘·공개 주소·API 토큰 끝,
     `MEDIA_BASE` = `https://pub-56e18436352746019b20fd2be46dbfe7.r2.dev` 커밋됨. **schema.sql 운영 실행 끝** (첫 실행은 42601 로 롤백 → `1f29960` 으로 고친 뒤 성공).
-    Secrets 등록은 운영자가 했다고 함 — `secrets list` 로 세 개 확인 필요. **남은 것: 함수 배포 → verify JWT 꺼짐 확인 → main 합쳐 푸시 → 배포 뒤 볼 것**
+    **→ 같은 날 배포 끝.** `functions deploy media`(운영자) → `secrets list` 에 R2 셋 있음 → 로그인 없이 POST 하면 함수 자신의 401 "로그인이 필요합니다"
+    (verify JWT 꺼짐, R2 설정 읽힘) → 운영 DB 확인: 새 함수 4개, cron 에 media 정리 들어감, 자료 100개 전부 approved →
+    `main` 을 `8b47d3a` 로 합쳐 푸시, 배포본 지문 `9b363de` = HEAD, 배포된 config.js 에 MEDIA_BASE 있음. **남은 것은 아래 "배포 뒤 볼 것" 4개**
   **배포 순서**: Cloudflare 설정(README 8단계 1~4) → SQL Editor 에서 schema.sql 전체 → `npx supabase functions deploy media`
   → 대시보드에서 media 의 verify JWT 가 꺼져 있는지 → `config.js` 의 `MEDIA_BASE` 채우고 푸시
   **배포 뒤 볼 것**
