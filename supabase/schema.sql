@@ -822,8 +822,10 @@ begin
   v_max := case when ct like 'video/%' then 50 * 1024 * 1024 else 10 * 1024 * 1024 end;
   if sz is null or sz <= 0 then raise exception '빈 파일입니다'; end if;
   if sz > v_max then raise exception '파일이 너무 큽니다 (사진 10MB, 영상 50MB 까지)'; end if;
+  -- case 를 괄호로 감싸야 한다. plpgsql 의 if 는 조건을 **처음 나오는 then** 까지로 잘라 읽어서,
+  -- 감싸지 않으면 case 안의 then 에서 조건이 끝나 42601 "syntax error at end of input" 이 난다 (2026-10-28 실제로 겪었다)
   if (select count(*) from public.media_uploads where user_id = v_me and created_at > now() - interval '1 day')
-     >= case when v_admin then 200 else 20 end then
+     >= (case when v_admin then 200 else 20 end) then
     raise exception '오늘은 더 올릴 수 없습니다. 내일 다시 시도해 주세요';
   end if;
   if not v_admin and (select count(*) from public.items where owner_id = v_me and status = 'pending') >= 10 then
