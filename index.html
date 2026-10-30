@@ -526,6 +526,8 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
 .chip.urgent,.badge.urgent{background:var(--bad);color:var(--bg)}
 .badge.urgent{font-family:var(--sans);font-weight:700;box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--bad)}
 .foot a{color:inherit}
+/* 개인정보 처리방침 링크: 표준지침이 다른 안내와 굵기·색으로 구분하라고 한다 (바닥글·로그인 창) */
+.foot a.privacy-link,a.privacy-link{color:var(--accent);font-weight:700}
 
 /* 운영자 소개 (?about) */
 .about{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:22px 22px 18px}
@@ -617,6 +619,7 @@ html,body{line-height:1.66;word-break:keep-all;overflow-wrap:anywhere}
   <span>검색어 예: <span class="mono">type:snippet #docker</span>, <span class="mono">cat:운동</span></span>
   <span id="partners" hidden></span>
   <span id="aboutFoot" hidden><a href="?about" id="aboutLink">운영자 소개</a></span>
+  <span><a href="privacy.html" class="privacy-link">개인정보 처리방침</a></span>
   <span><a href="#" id="rightsLink">권리 침해 신고</a></span>
 </footer>
 
@@ -1746,6 +1749,7 @@ function openLogin(reason){
       <div class="hint">코드는 메일 본문에 있습니다. 링크가 안 열리거나 만료됐다고 나와도 코드는 그대로 쓸 수 있습니다.</div>
     </div>
     <div class="hint"><a href="#" id="lfHave" style="color:var(--muted)">이미 받은 코드가 있어요</a></div>
+    <div class="hint">로그인 정보를 어떻게 처리하는지는 <a href="privacy.html" target="_blank" rel="noopener" class="privacy-link">개인정보 처리방침</a>에 있습니다.</div>
   </div><div class="modal-f"><span class="err" id="err"></span><button type="button" class="btn" data-close>취소</button><button class="btn primary" id="lfBtn">코드·링크 보내기</button><button class="btn primary" id="lfVerify" hidden>코드로 로그인</button></div></form>`,'narrow');
   const f=$('#lf'); if(!provs.length) f.e.focus();
   f.querySelectorAll('[data-prov]').forEach(b=>b.addEventListener('click',async()=>{

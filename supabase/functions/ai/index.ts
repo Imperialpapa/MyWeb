@@ -264,6 +264,9 @@ async function ask(
   const stream = await client.beta.messages.create({
     model: MODEL,
     max_tokens: opts.max_tokens,
+    // AI 응답 생성(추론)을 미국으로 고정한다. 개인정보 처리방침 7-3 이 이전 국가를 "미국" 이라고 적는 근거다 (요금 1.1배).
+    // 빼면 작업공간 기본값(global)으로 돌아가 처리방침이 사실과 달라진다. 아래 재시도에도 고정이 걸리는지는 공개 문서가 없다.
+    inference_geo: "us",
     // 안전 분류기가 요청을 거절하면 서버가 다른 모델로 같은 요청을 다시 시도한다
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
@@ -279,21 +282,24 @@ async function ask(
   let stop: string | null = null;
   let done = false;                     // message_stop 을 봤는가
   let tokIn = 0, tokCache = 0, tokOut = 0;
+  let geo = "";                         // 실제로 추론한 지역(us/global). 위 inference_geo 고정이 먹었는지 로그에서 본다
   for await (const ev of stream) {
     const e = ev as {
       type: string;
       delta?: { type?: string; text?: string; stop_reason?: string | null };
-      message?: { usage?: { input_tokens?: number; cache_read_input_tokens?: number } };
-      usage?: { output_tokens?: number };
+      message?: { usage?: { input_tokens?: number; cache_read_input_tokens?: number; inference_geo?: string } };
+      usage?: { output_tokens?: number; inference_geo?: string };
     };
     // 생각(thinking_delta)은 버리고 답(text_delta)만 모은다
     if (e.type === "content_block_delta" && e.delta?.type === "text_delta") text += e.delta.text || "";
     else if (e.type === "message_delta") {
       if (e.delta?.stop_reason) stop = e.delta.stop_reason;
       if (e.usage?.output_tokens) tokOut = e.usage.output_tokens;   // 누적값이라 덮어쓴다
+      if (e.usage?.inference_geo) geo = e.usage.inference_geo;
     } else if (e.type === "message_start") {
       tokIn = e.message?.usage?.input_tokens || 0;
       tokCache = e.message?.usage?.cache_read_input_tokens || 0;
+      geo = e.message?.usage?.inference_geo || geo;
     } else if (e.type === "message_stop") done = true;
   }
 
@@ -302,7 +308,7 @@ async function ask(
   // keySource 는 Supabase 키를 어디서 골랐는지(publishable/anon)만 싣는다. 키 교체·되돌리기가 실제로 먹었는지 여기서 본다.
   console.log(JSON.stringify({
     ai: opts.label, model: MODEL, effort: opts.effort,
-    in: tokIn, cached: tokCache, out: tokOut, ms: Date.now() - t0, stop: stop || "none",
+    in: tokIn, cached: tokCache, out: tokOut, ms: Date.now() - t0, stop: stop || "none", geo: geo || "none",
     keySource: call.keySource,
   }));
 

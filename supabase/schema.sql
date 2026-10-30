@@ -969,6 +969,14 @@ select cron.schedule('daily-privacy-cleanup', '7 19 * * *', $job$
      and not exists (select 1 from public.items i where i.media_key = m.key and i.status = 'pending');
 $job$);
 
+-- 인증 감사 기록(auth.audit_log_entries) 30일 정리. 처리방침 3장이 "30일이 지난 기록은 매일 지운다" 고 적는다.
+-- 대시보드 Authentication › Audit Logs 의 "Write audit logs to the database" 가 켜져 있으면 로그인·코드 요청마다
+-- IP·이메일이 담긴 행이 쌓인다 (꺼져 있으면 지울 것이 없을 뿐이다). 탈퇴 때는 delete-user.sql 이 그 사람 것을 바로 지운다.
+-- 위 작업과 따로 둔다 — auth 스키마 권한 문제로 이 줄이 실패해도 위 정리까지 함께 롤백되지 않게. 시각은 위보다 10분 뒤.
+select cron.schedule('daily-audit-log-cleanup', '17 19 * * *', $job$
+  delete from auth.audit_log_entries where created_at < now() - interval '30 days';
+$job$);
+
 -- ============================================================
 -- 운영자 지정: 본인이 사이트에 한 번 로그인한 뒤, 아래 한 줄을
 -- 이메일만 바꿔 실행하세요.
